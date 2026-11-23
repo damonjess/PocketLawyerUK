@@ -656,9 +656,9 @@ class LegalAuditService(
         )
         
         const val MISSING_KEY_MESSAGE =
-            "No API key set. Tap the key icon in the LAW AI header and paste a standard 'AIza...' API key from Google Cloud Console (APIs & Services > Credentials), restricted to the Generative Language API."
+            "No API key set. Tap the key icon in the LAW AI header and paste a Gemini API key from Google AI Studio (aistudio.google.com/apikey) or Google Cloud Console (APIs & Services > Credentials), restricted to the Generative Language API."
         private const val INVALID_KEY_MESSAGE =
-            "The server rejected this API key (401). 'AQ.' auth keys are currently rejected by the Generative Language API — create a standard 'AIza...' key in Google Cloud Console, restrict it to the Generative Language API, and paste it via the key icon."
+            "The server rejected this API key (401). Check that the key is active and copied in full, and that the Generative Language API is enabled for its project, then paste it again via the key icon."
         private const val INLINE_LIMIT_BYTES = 18L * 1024L * 1024L
         private const val PREFS_NAME = "pocket_lawyer_prefs"
         private const val PREF_API_KEY = "gemini_api_key"

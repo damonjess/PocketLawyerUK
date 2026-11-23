@@ -154,7 +154,7 @@ fun LegalChatScreen(
                         color = CreamAccent
                     )
                     Text(
-                        "Google AI Studio now issues \"AQ.\" auth keys that the Gemini API rejects. Create a standard \"AIza...\" key in Google Cloud Console → Credentials, restrict it to the Generative Language API, then paste it here.",
+                        "No Gemini API key yet. Create one in Google AI Studio (aistudio.google.com/apikey) or Google Cloud Console → Credentials, restrict it to the Generative Language API, then paste it here.",
                         fontSize = 12.sp,
                         color = TextSecondary,
                         lineHeight = 17.sp
@@ -178,14 +178,14 @@ fun LegalChatScreen(
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            "Paste a standard \"AIza...\" key from Google Cloud Console → APIs & Services → Credentials, restricted to the Generative Language API. \"AQ.\" auth keys are rejected by Gemini.",
+                            "Paste a Gemini API key from Google AI Studio (aistudio.google.com/apikey) or Google Cloud Console → APIs & Services → Credentials, restricted to the Generative Language API. Both \"AIza...\" and \"AQ....\" key formats are supported.",
                             fontSize = 12.sp,
                             color = TextSecondary
                         )
                         OutlinedTextField(
                             value = draftKey,
                             onValueChange = { draftKey = it },
-                            placeholder = { Text("AIza...", fontSize = 12.sp) },
+                            placeholder = { Text("API key", fontSize = 12.sp) },
                             singleLine = true,
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = CreamAccent,
