@@ -1,0 +1,236 @@
+package com.example.pocketlawyeruk.ui
+
+import android.app.Application
+import android.content.Context
+import android.net.Uri
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.pocketlawyeruk.data.LegalAuditService
+import com.example.pocketlawyeruk.data.VideoAudioExtractor
+import com.example.pocketlawyeruk.data.local.PocketLawyerDatabase
+import com.example.pocketlawyeruk.data.local.VaultMappers.toEntity
+import com.example.pocketlawyeruk.data.local.VaultMappers.toModel
+import com.example.pocketlawyeruk.model.*
+import com.example.pocketlawyeruk.ui.screens.EncounterType
+import com.example.pocketlawyeruk.worker.BackgroundAuditWorker
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import java.io.File
+
+data class PocketLawyerUiState(
+    val audits: List<AuditReport> = SampleAudits.examples,
+    val scans: List<DocumentScanResult> = emptyList(),
+    val bookmarks: List<SavedBookmark> = emptyList(),
+    val chatMessages: List<ChatMessage> = emptyList(),
+    val activeReport: AuditReport? = null,
+    val activeScan: DocumentScanResult? = null,
+    val vaultSearchQuery: String = "",
+    val isAnalyzing: Boolean = false,
+    val isScanningDocument: Boolean = false,
+    val isChatLoading: Boolean = false,
+    val statusMessage: String = "Auditing intercept against UK statutes...",
+    val errorMessage: String? = null,
+    val qaAnswer: String? = null,
+    val isAskingQa: Boolean = false,
+    // Tap-to-Read Statute Sheet state
+    val statuteSheetCitation: String? = null,
+    val statuteLoading: Boolean = false,
+    val statuteResult: StatuteLookupResult? = null,
+    val statuteError: String? = null,
+    val apiKey: String = ""
+)
+
+class PocketLawyerViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val db = PocketLawyerDatabase.getInstance(application)
+    private val audioExtractor = VideoAudioExtractor()
+    private val auditService = LegalAuditService(application)
+    private var statuteJob: Job? = null
+
+    private val _uiState = MutableStateFlow(
+        PocketLawyerUiState(apiKey = LegalAuditService.getStoredApiKey(application))
+    )
+    val uiState: StateFlow<PocketLawyerUiState> = _uiState.asStateFlow()
+
+    fun updateApiKey(newKey: String) {
+        val cleaned = newKey.trim()
+        LegalAuditService.saveApiKey(getApplication(), cleaned)
+        _uiState.update { it.copy(apiKey = LegalAuditService.getStoredApiKey(getApplication())) }
+    }
+
+    init {
+        // Observe Room Vault tables live
+        viewModelScope.launch {
+            db.auditDao().observeAll().collect { entities ->
+                val saved = entities.map { it.toModel() }
+                val combined = if (saved.isEmpty()) SampleAudits.examples else saved + SampleAudits.examples
+                _uiState.update { it.copy(audits = combined) }
+            }
+        }
+        viewModelScope.launch {
+            db.documentScanDao().observeAll().collect { entities ->
+                _uiState.update { it.copy(scans = entities.map { e -> e.toModel() }) }
+            }
+        }
+        viewModelScope.launch {
+            db.chatDao().observeAll().collect { entities ->
+                _uiState.update { it.copy(chatMessages = entities.map { e -> e.toModel() }) }
+            }
+        }
+        viewModelScope.launch {
+            db.bookmarkDao().observeAll().collect { entities ->
+                _uiState.update { it.copy(bookmarks = entities.map { e -> e.toModel() }) }
+            }
+        }
+    }
+
+    fun openAudit(auditId: String) {
+        viewModelScope.launch {
+            val found = _uiState.value.audits.find { it.id == auditId }
+                ?: db.auditDao().getById(auditId)?.toModel()
+            if (found != null) {
+                _uiState.update { it.copy(activeReport = found, qaAnswer = null, errorMessage = null) }
+            }
+        }
+    }
+
+    fun closeReport() = _uiState.update { it.copy(activeReport = null, qaAnswer = null) }
+    fun clearError() = _uiState.update { it.copy(errorMessage = null) }
+    fun updateVaultSearch(query: String) = _uiState.update { it.copy(vaultSearchQuery = query) }
+    fun openSavedScan(scan: DocumentScanResult) = _uiState.update { it.copy(activeScan = scan) }
+    fun clearActiveScan() = _uiState.update { it.copy(activeScan = null) }
+
+    fun deleteAudit(id: String) = viewModelScope.launch { db.auditDao().deleteById(id) }
+    fun deleteScan(id: String) = viewModelScope.launch { db.documentScanDao().deleteById(id) }
+    fun deleteBookmark(id: String) = viewModelScope.launch { db.bookmarkDao().deleteById(id) }
+
+    fun queueBackgroundAudit(context: Context, url: String, type: EncounterType) {
+        BackgroundAuditWorker.enqueue(context, url, type)
+        _uiState.update {
+            it.copy(errorMessage = "Queued in background. You can leave the app — a notification will fire when the legal dossier is ready.")
+        }
+    }
+
+    fun runAudit(context: Context, url: String, videoUri: Uri?, encounterType: EncounterType) {
+        if (videoUri == null && url.isBlank()) {
+            _uiState.update { it.copy(errorMessage = "Paste a video link or load a local clip first.") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isAnalyzing = true, statusMessage = "INITIALISING INTERCEPT...", errorMessage = null) }
+            var downloadedAudio: File? = null
+            try {
+                val report = if (videoUri != null) {
+                    auditService.analyzeVideoUri(context, videoUri, url.takeIf { it.isNotBlank() }, encounterType) { status ->
+                        _uiState.update { it.copy(statusMessage = status.uppercase()) }
+                    }
+                } else {
+                    downloadedAudio = audioExtractor.downloadAudioFromUrl(context, url) { status ->
+                        _uiState.update { it.copy(statusMessage = status.uppercase()) }
+                    }
+                    _uiState.update { it.copy(statusMessage = "TRANSCRIBING & FACT-CHECKING UK LAW...") }
+                    auditService.analyzeAudioFile(downloadedAudio, url.trim(), encounterType) { status ->
+                        _uiState.update { it.copy(statusMessage = status.uppercase()) }
+                    }
+                }
+
+                db.auditDao().upsert(report.toEntity())
+                _uiState.update { it.copy(activeReport = report, isAnalyzing = false) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isAnalyzing = false, errorMessage = e.localizedMessage ?: "Audit failed.") }
+            } finally {
+                downloadedAudio?.parentFile?.deleteRecursively()
+            }
+        }
+    }
+
+    fun analyzeDocument(context: Context, uri: Uri?, pastedText: String?, note: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isScanningDocument = true, errorMessage = null) }
+            try {
+                val result = auditService.analyzeDocumentOrText(context, uri, pastedText, note)
+                db.documentScanDao().upsert(result.toEntity())
+                _uiState.update { it.copy(activeScan = result, isScanningDocument = false) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isScanningDocument = false, errorMessage = e.localizedMessage ?: "Document scan failed.") }
+            }
+        }
+    }
+
+    fun lookupStatute(citation: String, jurisdiction: UkJurisdiction) {
+        statuteJob?.cancel()
+        statuteJob = viewModelScope.launch {
+            _uiState.update {
+                it.copy(statuteSheetCitation = citation, statuteLoading = true, statuteResult = null, statuteError = null)
+            }
+            try {
+                val res = withTimeout(30_000L) {
+                    auditService.lookupUkStatute(citation, jurisdiction)
+                }
+                _uiState.update { it.copy(statuteLoading = false, statuteResult = res) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        statuteLoading = false,
+                        statuteError = e.localizedMessage ?: "Statute lookup timed out. Tap to retry."
+                    )
+                }
+            }
+        }
+    }
+
+    fun dismissStatuteSheet() {
+        statuteJob?.cancel()
+        _uiState.update { it.copy(statuteSheetCitation = null, statuteResult = null, statuteError = null, statuteLoading = false) }
+    }
+
+    fun saveBookmark(title: String, content: String, citation: String, folder: BookmarkFolder) {
+        viewModelScope.launch {
+            db.bookmarkDao().upsert(SavedBookmark(folder = folder, title = title, content = content, citation = citation).toEntity())
+        }
+    }
+
+    fun askFollowUp(question: String) {
+        val current = _uiState.value.activeReport ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isAskingQa = true) }
+            try {
+                val answer = auditService.askFollowUp(current, question)
+                _uiState.update { it.copy(qaAnswer = answer, isAskingQa = false) }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(qaAnswer = "Error: ${e.localizedMessage}", isAskingQa = false) }
+            }
+        }
+    }
+
+    fun sendChatMessage(text: String) {
+        if (_uiState.value.apiKey.isBlank()) {
+            _uiState.update { it.copy(errorMessage = LegalAuditService.MISSING_KEY_MESSAGE) }
+            return
+        }
+        val userMsg = ChatMessage(isUser = true, text = text)
+        val historyWithUser = _uiState.value.chatMessages + userMsg
+        _uiState.update { it.copy(isChatLoading = true) }
+
+        viewModelScope.launch {
+            db.chatDao().insert(userMsg.toEntity())
+            try {
+                val reply = auditService.chatUkLaw(historyWithUser)
+                db.chatDao().insert(reply.toEntity())
+                _uiState.update { it.copy(isChatLoading = false) }
+            } catch (e: Exception) {
+                val err = ChatMessage(isUser = false, text = "Error verifying UK statutes: ${e.localizedMessage ?: "Network issue"}")
+                db.chatDao().insert(err.toEntity())
+                _uiState.update { it.copy(isChatLoading = false) }
+            }
+        }
+    }
+
+    fun clearChat() = viewModelScope.launch { db.chatDao().clearAll() }
+}

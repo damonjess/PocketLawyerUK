@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Tactical Cyber Shield -->
+    <path
+        android:fillColor="#0B1624"
+        android:strokeColor="#00F0FF"
+        android:strokeWidth="2.4"
+        android:strokeLineJoin="miter"
+        android:pathData="M54,23 L78,31 L78,54 C78,69 67,79 54,85 C41,79 30,69 30,54 L30,31 Z" />
+
+    <!-- Inner Shield Highlight -->
+    <path
+        android:strokeColor="#1D5E75"
+        android:strokeWidth="1"
+        android:pathData="M54,27.5 L74,34.5 L74,53.5 C74,66 64.5,74.5 54,80 C43.5,74.5 34,66 34,53.5 L34,34.5 Z" />
+
+    <!-- Glowing Scales of Justice: Center Pillar & Base -->
+    <path
+        android:strokeColor="#00F0FF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M54,37 V68 M45,68 H63 M39,44 H69" />
+
+    <!-- Left Scale Pan -->
+    <path
+        android:strokeColor="#00F0FF"
+        android:strokeWidth="1.7"
+        android:strokeLineJoin="round"
+        android:pathData="M41,44 L36,56 H46 L41,44 Z" />
+
+    <!-- Right Scale Pan -->
+    <path
+        android:strokeColor="#00F0FF"
+        android:strokeWidth="1.7"
+        android:strokeLineJoin="round"
+        android:pathData="M67,44 L62,56 H72 L67,44 Z" />
+
+    <!-- Neon Matrix-Green Core Node -->
+    <path
+        android:fillColor="#00FF9C"
+        android:pathData="M54,34 A3,3 0 1,0 54,40 A3,3 0 1,0 54,34 Z" />
+
+    <!-- Corner HUD Targeting Brackets -->
+    <path
+        android:strokeColor="#00FF9C"
+        android:strokeWidth="1.8"
+        android:pathData="M24,30 V24 H30 M78,24 H84 V30 M24,78 V84 H30 M78,84 H84 V78" />
+</vector>
