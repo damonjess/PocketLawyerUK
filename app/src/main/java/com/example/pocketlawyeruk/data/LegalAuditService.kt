@@ -7,7 +7,10 @@ import com.example.pocketlawyeruk.BuildConfig
 import com.example.pocketlawyeruk.model.*
 import com.example.pocketlawyeruk.ui.screens.EncounterType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -29,10 +32,19 @@ class LegalAuditService(
 ) {
     constructor(context: Context) : this({ getStoredApiKey(context) })
 
-    private val client = OkHttpClient.Builder()
+    // 60s read / 70s total cap so a hung model fails over in ~1 min instead of stalling 4 mins
+    private val auditClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(45, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(70, TimeUnit.SECONDS)
+        .build()
+
+    // Longer timeout strictly for >18 MB Gemini Files API uploads
+    private val uploadClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(180, TimeUnit.SECONDS)
-        .readTimeout(240, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
     // Fast 20s timeout for text-only calls (Statute Intel, Law AI chat, case follow-ups)
@@ -49,10 +61,11 @@ class LegalAuditService(
         audioFile: File,
         sourceUrl: String?,
         encounterType: EncounterType,
+        confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
         onStatus: (String) -> Unit = {}
     ): AuditReport = withContext(Dispatchers.IO) {
         val mediaPart = buildMediaPartFromFile(audioFile, "audio/mp3", onStatus)
-        runAuditWithMediaPart(mediaPart, sourceUrl, null, encounterType)
+        runAuditWithMediaPart(mediaPart, sourceUrl, null, encounterType, confrontingParty, onStatus)
     }
 
     suspend fun analyzeVideoUri(
@@ -60,13 +73,14 @@ class LegalAuditService(
         videoUri: Uri,
         sourceUrl: String?,
         encounterType: EncounterType,
+        confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
         onStatus: (String) -> Unit = {}
     ): AuditReport = withContext(Dispatchers.IO) {
         val mimeType = context.contentResolver.getType(videoUri) ?: "video/mp4"
         val tempFile = copyUriToTempFile(context, videoUri, "upload_clip")
         try {
             val mediaPart = buildMediaPartFromFile(tempFile, mimeType, onStatus)
-            runAuditWithMediaPart(mediaPart, sourceUrl, videoUri.toString(), encounterType)
+            runAuditWithMediaPart(mediaPart, sourceUrl, videoUri.toString(), encounterType, confrontingParty, onStatus)
         } finally {
             tempFile.delete()
         }
@@ -112,7 +126,7 @@ class LegalAuditService(
             .post(metaJson.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
 
-        val uploadUrl = client.newCall(startReq).execute().use { resp ->
+        val uploadUrl = uploadClient.newCall(startReq).execute().use { resp ->
             if (!resp.isSuccessful) throw IllegalStateException("Files API start error (${resp.code}): ${resp.body?.string()}")
             resp.header("X-Goog-Upload-URL")
                 ?: throw IllegalStateException("Missing X-Goog-Upload-URL header from Gemini Files API.")
@@ -126,7 +140,7 @@ class LegalAuditService(
             .post(file.asRequestBody(mimeType.toMediaType()))
             .build()
 
-        val (fileUri, fileName, initialState) = client.newCall(uploadReq).execute().use { resp ->
+        val (fileUri, fileName, initialState) = uploadClient.newCall(uploadReq).execute().use { resp ->
             val body = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) throw IllegalStateException("Files API upload error (${resp.code}): $body")
             val fileObj = JSONObject(body).getJSONObject("file")
@@ -143,7 +157,7 @@ class LegalAuditService(
                     .header("x-goog-api-key", cleanKey)
                     .get()
                     .build()
-                val state = client.newCall(pollReq).execute().use { resp ->
+                val state = uploadClient.newCall(pollReq).execute().use { resp ->
                     JSONObject(resp.body?.string().orEmpty()).optString("state", "PROCESSING")
                 }
                 if (state == "ACTIVE") return fileUri
@@ -153,11 +167,13 @@ class LegalAuditService(
         return fileUri
     }
 
-    private fun runAuditWithMediaPart(
+    private suspend fun runAuditWithMediaPart(
         mediaPart: JSONObject,
         sourceUrl: String?,
         videoUriString: String?,
-        encounterType: EncounterType
+        encounterType: EncounterType,
+        confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
+        onStatus: (String) -> Unit = {}
     ): AuditReport {
         val bodyJson = JSONObject().apply {
             put("system_instruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", UK_LEGAL_AUDIT_PROMPT))))
@@ -167,9 +183,11 @@ class LegalAuditService(
                     put(mediaPart)
                     put(JSONObject().put(
                         "text",
-                        "Listen to the full UK encounter. Auto-detect whether this occurred in ENGLAND_WALES, SCOTLAND, or NORTHERN_IRELAND " +
+                        "${confrontingParty.promptDirective} " +
+                            "Listen to the full UK encounter. Auto-detect whether this occurred in ENGLAND_WALES, SCOTLAND, or NORTHERN_IRELAND " +
                             "(from accents, force names, uniforms, or legislation mentioned) and apply that exact jurisdiction's law. " +
-                            "Transcribe it, fact-check BOTH police officers AND public/auditor claims, and produce the 'What If This Happened to Me?' guide. " +
+                            "Group consecutive speech by the same speaker into combined transcript turns. " +
+                            "Fact-check all sides objectively and produce the 'What If This Happened to Me?' guide. " +
                             "Category hint: ${encounterType.statuteSubtitle}. Return ONLY raw valid JSON with no extra commentary."
                     ))
                 })
@@ -181,8 +199,13 @@ class LegalAuditService(
             })
         }
 
-        val rawText = executeGeminiText(bodyJson, models = AUDIT_MODELS)
-        return parseAuditJson(rawText, sourceUrl, videoUriString, encounterType)
+        val rawText = executeGeminiText(
+            bodyJson = bodyJson,
+            models = AUDIT_MODELS,
+            httpClient = auditClient,
+            onStatus = onStatus
+        )
+        return parseAuditJson(rawText, sourceUrl, videoUriString, encounterType, confrontingParty)
     }
 
     private fun buildPermissiveSafetySettings(): JSONArray = JSONArray().apply {
@@ -376,18 +399,117 @@ class LegalAuditService(
         executeGeminiText(bodyJson, models = CHAT_MODELS, httpClient = quickClient)
     }
 
+    // ---------------- 5. LIVE CO-PILOT MANUAL COACH & TRANSCRIPT SAVE ----------------
+
+    suspend fun getLiveCoachAdvice(
+        recentTranscript: String,
+        partyMode: LivePartyMode,
+        jurisdiction: UkJurisdiction
+    ): LiveCoachAdvice = withContext(Dispatchers.IO) {
+        val partyText = if (partyMode == LivePartyMode.POLICE) "UK Police Officer(s)" else "Private Staff / Security"
+        val prompt = """
+            LIVE UK ENCOUNTER CO-PILOT (${jurisdiction.displayName}).
+            Confronting party: $partyText.
+            Give ULTRA-BRIEF tactical legal advice for what is happening right now in this live transcript.
+            Transcript:
+            $recentTranscript
+
+            Return ONLY raw valid JSON:
+            {
+              "canRefuse": "Short 1-sentence thing the user can lawfully refuse right now",
+              "mustComply": "Short 1-sentence thing the user MUST lawfully comply with right now",
+              "sayNow": "Calm, polite 1-2 sentence exact script to say immediately",
+              "statute": "Primary UK Act & section"
+            }
+        """.trimIndent()
+
+        val bodyJson = JSONObject().apply {
+            put("contents", JSONArray().put(JSONObject().apply {
+                put("role", "user")
+                put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+            }))
+            put("safetySettings", buildPermissiveSafetySettings())
+            put("generationConfig", JSONObject().apply {
+                put("maxOutputTokens", 2048)
+                put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
+            })
+        }
+
+        val raw = executeGeminiText(bodyJson, models = CHAT_MODELS, httpClient = quickClient)
+        runCatching {
+            val json = JSONObject(extractJsonObject(raw))
+            LiveCoachAdvice(
+                canRefuse = json.optString("canRefuse", "Giving personal details without a valid statutory power."),
+                mustComply = json.optString("mustComply", "Stay calm and do not physically obstruct."),
+                sayNow = json.optString("sayNow", raw.trim()),
+                statute = json.optString("statute", "UK Law")
+            )
+        }.getOrElse {
+            LiveCoachAdvice(
+                canRefuse = "Review advice below.",
+                mustComply = "Remain calm and lawful.",
+                sayNow = raw.trim(),
+                statute = jurisdiction.displayName
+            )
+        }
+    }
+
+    suspend fun analyzeLiveTranscript(
+        transcriptLines: List<TranscriptLine>,
+        partyMode: LivePartyMode,
+        jurisdiction: UkJurisdiction
+    ): AuditReport = withContext(Dispatchers.IO) {
+        val transcriptText = transcriptLines.joinToString("\n") {
+            val ts = "%02d:%02d".format(it.timestampSeconds / 60, it.timestampSeconds % 60)
+            "[$ts] ${it.text}"
+        }
+        val partyDirective = if (partyMode == LivePartyMode.POLICE) {
+            "CONFIRMED: Confronting party is UK POLICE (side=\"OFFICER\")."
+        } else {
+            "CONFIRMED: Confronting party is PRIVATE STAFF / SECURITY (side=\"STAFF_SECURITY\"); mark all GOWISELY steps as SKIPPED."
+        }
+
+        val bodyJson = JSONObject().apply {
+            put("system_instruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", UK_LEGAL_AUDIT_PROMPT))))
+            put("contents", JSONArray().put(JSONObject().apply {
+                put("role", "user")
+                put("parts", JSONArray().put(JSONObject().put(
+                    "text",
+                    "$partyDirective Jurisdiction: ${jurisdiction.name}. " +
+                        "Audit this live-captured UK encounter transcript and return ONLY valid JSON:\n\n$transcriptText"
+                )))
+            }))
+            put("safetySettings", buildPermissiveSafetySettings())
+            put("generationConfig", JSONObject().apply {
+                put("maxOutputTokens", 8192)
+                put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
+            })
+        }
+
+        val encounterType = if (partyMode == LivePartyMode.POLICE) EncounterType.PEDESTRIAN else EncounterType.FILMING
+        val raw = executeGeminiText(bodyJson, models = CHAT_MODELS, httpClient = quickClient)
+        parseAuditJson(raw, sourceUrl = null, videoUriString = null, encounterType = encounterType)
+    }
+
     // ---------------- INTERNAL HELPERS & PARSERS ----------------
 
-    private fun executeGeminiRaw(
+    private suspend fun executeGeminiRaw(
         bodyJson: JSONObject,
         models: List<String> = AUDIT_MODELS,
-        httpClient: OkHttpClient = client
+        httpClient: OkHttpClient = auditClient,
+        onStatus: (String) -> Unit = {}
     ): JSONObject {
         val cleanKey = apiKeyProvider().trim()
         if (cleanKey.isEmpty()) throw IllegalStateException(MISSING_KEY_MESSAGE)
         val errors = mutableListOf<String>()
 
-        for (model in models) {
+        for ((index, model) in models.withIndex()) {
+            currentCoroutineContext().ensureActive()
+            onStatus(
+                if (index == 0) "Analysing with $model..."
+                else "Failover ${index + 1}/${models.size}: $model..."
+            )
+
             val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
             val req = Request.Builder()
                 .url(url)
@@ -395,8 +517,13 @@ class LegalAuditService(
                 .post(bodyJson.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
                 .build()
 
+            val call = httpClient.newCall(req)
+            val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+                if (cause != null) call.cancel()
+            }
+
             try {
-                httpClient.newCall(req).execute().use { resp ->
+                call.execute().use { resp ->
                     val body = resp.body?.string().orEmpty()
                     if (resp.isSuccessful) {
                         val root = JSONObject(body)
@@ -407,7 +534,6 @@ class LegalAuditService(
                             return root
                         }
 
-                        // HTTP 200 but empty text (e.g. thought-only / STOP with no parts / safety block) -> try next model
                         val finishReason = candidate?.optString("finishReason")
                             ?: root.optJSONObject("promptFeedback")?.optString("blockReason")
                             ?: "EMPTY_CANDIDATE"
@@ -415,12 +541,13 @@ class LegalAuditService(
                         return@use
                     }
 
-                    // Fail fast on bad/expired API keys (Gemini returns 400 API_KEY_INVALID, 401, or 403)
                     if (resp.code == 401 || (resp.code in listOf(400, 403) && isInvalidApiKeyResponse(body))) {
                         throw IllegalStateException(INVALID_KEY_MESSAGE)
                     }
+                    if (resp.code == 402) throw IllegalStateException(
+                        "Billing is not active for this project (402): prepayment credits are depleted. Add credits at aistudio.google.com/billing, or unlink the billing account in Google Cloud Console to use the free tier."
+                    )
 
-                    // Fail over on quota (429), missing model (404), server busy (500/503), or param mismatch (400)
                     if (resp.code in listOf(400, 404, 429, 500, 503)) {
                         val shortMsg = runCatching {
                             JSONObject(body).getJSONObject("error").optString("message").take(60)
@@ -429,14 +556,13 @@ class LegalAuditService(
                         return@use
                     }
 
-                    if (resp.code == 402) throw IllegalStateException(
-                        "Billing is not active for this project (402): prepayment credits are depleted. Add credits at aistudio.google.com/billing, or unlink the billing account in Google Cloud Console to use the free tier."
-                    )
-
                     throw IllegalStateException("Gemini API error (${resp.code}) on $model: ${apiErrorMessage(body)}")
                 }
             } catch (e: IOException) {
+                currentCoroutineContext().ensureActive()
                 errors.add("$model: timeout/network (${e.localizedMessage ?: e.message ?: "unknown"})")
+            } finally {
+                cancelHandle?.dispose()
             }
         }
 
@@ -456,12 +582,13 @@ class LegalAuditService(
             ?.takeIf { it.isNotBlank() }
             ?: body.take(300)
 
-    private fun executeGeminiText(
+    private suspend fun executeGeminiText(
         bodyJson: JSONObject,
         models: List<String> = AUDIT_MODELS,
-        httpClient: OkHttpClient = client
+        httpClient: OkHttpClient = auditClient,
+        onStatus: (String) -> Unit = {}
     ): String {
-        val root = executeGeminiRaw(bodyJson, models, httpClient)
+        val root = executeGeminiRaw(bodyJson, models, httpClient, onStatus)
         val candidate = root.getJSONArray("candidates").getJSONObject(0)
         return extractAllTextParts(candidate)
     }
@@ -504,7 +631,8 @@ class LegalAuditService(
         rawJson: String,
         sourceUrl: String?,
         videoUriString: String?,
-        encounterType: EncounterType
+        encounterType: EncounterType,
+        confrontingParty: ConfrontingParty = ConfrontingParty.AUTO
     ): AuditReport {
         val json = JSONObject(extractJsonObject(rawJson))
 
@@ -551,9 +679,9 @@ class LegalAuditService(
                 val o = arr.getJSONObject(i)
                 val verdict = runCatching { StatementVerdict.valueOf(o.optString("verdict", "LAWFUL").uppercase()) }
                     .getOrDefault(StatementVerdict.LAWFUL)
-                val speakerLabel = o.optString("speaker", "Speaker")
+                var speakerLabel = o.optString("speaker", "Speaker")
                 val rawSide = o.optString("side", "").uppercase()
-                val side = when {
+                var side = when {
                     rawSide == "OFFICER" || rawSide == "POLICE" -> SpeakerSide.OFFICER
                     rawSide == "STAFF_SECURITY" || rawSide == "STAFF" || rawSide == "SECURITY" -> SpeakerSide.STAFF_SECURITY
                     rawSide == "PUBLIC" || rawSide == "AUDITOR" || rawSide == "FILMER" -> SpeakerSide.PUBLIC
@@ -562,6 +690,24 @@ class LegalAuditService(
                         speakerLabel.contains("guard", true) || speakerLabel.contains("manager", true) -> SpeakerSide.STAFF_SECURITY
                     else -> SpeakerSide.PUBLIC
                 }
+
+                // Hard-enforce the user's Police / Staff toggle
+                when (confrontingParty) {
+                    ConfrontingParty.POLICE -> {
+                        if (side == SpeakerSide.STAFF_SECURITY) {
+                            side = SpeakerSide.OFFICER
+                            speakerLabel = "Officer"
+                        }
+                    }
+                    ConfrontingParty.STAFF -> {
+                        if (side == SpeakerSide.OFFICER) {
+                            side = SpeakerSide.STAFF_SECURITY
+                            speakerLabel = "Staff"
+                        }
+                    }
+                    else -> Unit
+                }
+
                 timeline.add(
                     AuditedStatement(
                         timestampSeconds = o.optInt("timestampSeconds"),
@@ -576,14 +722,23 @@ class LegalAuditService(
             }
         }
 
-        val officerViolations = json.optInt(
-            "officerViolationCount",
-            timeline.count { it.side == SpeakerSide.OFFICER && it.verdict != StatementVerdict.LAWFUL }
-        )
-        val staffViolations = json.optInt(
-            "staffViolationCount",
-            timeline.count { it.side == SpeakerSide.STAFF_SECURITY && it.verdict != StatementVerdict.LAWFUL }
-        )
+        // If user explicitly locked Staff, hide GOWISELY matrix cleanly
+        val finalGowisely = if (confrontingParty == ConfrontingParty.STAFF) {
+            gowisely.map { it.copy(status = GowiselyStatus.SKIPPED) }
+        } else {
+            gowisely
+        }
+
+        val officerViolations = when (confrontingParty) {
+            ConfrontingParty.POLICE -> timeline.count { it.side == SpeakerSide.OFFICER && it.verdict != StatementVerdict.LAWFUL }
+            ConfrontingParty.STAFF -> 0
+            else -> json.optInt("officerViolationCount", timeline.count { it.side == SpeakerSide.OFFICER && it.verdict != StatementVerdict.LAWFUL })
+        }
+        val staffViolations = when (confrontingParty) {
+            ConfrontingParty.STAFF -> timeline.count { it.side == SpeakerSide.STAFF_SECURITY && it.verdict != StatementVerdict.LAWFUL }
+            ConfrontingParty.POLICE -> 0
+            else -> json.optInt("staffViolationCount", timeline.count { it.side == SpeakerSide.STAFF_SECURITY && it.verdict != StatementVerdict.LAWFUL })
+        }
         val publicMyths = json.optInt(
             "publicMythCount",
             timeline.count { it.side == SpeakerSide.PUBLIC && it.verdict != StatementVerdict.LAWFUL }
@@ -606,7 +761,7 @@ class LegalAuditService(
             fullTranscript = transcript,
             yourRights = rights,
             whatIfGuide = WhatIfGuide(refuse, mustDo, whatIfJson?.optString("exactScriptToSay").orEmpty()),
-            gowiselyChecklist = gowisely,
+            gowiselyChecklist = finalGowisely,
             timeline = timeline,
             takeaway = json.optString("takeaway", "Review the citations above for details."),
             isExample = false
@@ -650,12 +805,12 @@ class LegalAuditService(
 
     companion object {
         
-        // Best reasoning first for video/audio & doc scans, backed by your 500/day Lite pools
+        // Fast 500/day Flash-Lite first for quick audio transcription & fact-checking; full Flash as backup
         private val AUDIT_MODELS = listOf(
-            "gemini-3.8-flash",
-            "gemini-3-flash-preview",
             "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite"
+            "gemini-3.1-flash-lite",
+            "gemini-3.8-flash",
+            "gemini-3-flash-preview"
         )
         
         // Your two 500/day Flash-Lite pools first for fast Law AI chat & statute taps

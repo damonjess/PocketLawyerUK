@@ -32,6 +32,7 @@ import com.example.pocketlawyeruk.ui.components.StatuteLookupSheet
 import com.example.pocketlawyeruk.ui.screens.*
 import com.example.pocketlawyeruk.ui.theme.*
 import com.example.pocketlawyeruk.worker.BackgroundAuditWorker
+import kotlinx.coroutines.delay
 
 private enum class AppTab { AUDIT, SCAN, CHAT, VAULT }
 
@@ -133,6 +134,7 @@ fun PocketLawyerRoot(
     val state by vm.uiState.collectAsState()
     val context = LocalContext.current
     var currentTab by remember { mutableStateOf(AppTab.AUDIT) }
+    var showLiveCopilot by remember { mutableStateOf(false) }
 
     // Open audit automatically when user taps a background completion notification
     LaunchedEffect(openAuditId) {
@@ -140,6 +142,11 @@ fun PocketLawyerRoot(
             vm.openAudit(openAuditId)
             onConsumedOpenAudit()
         }
+    }
+
+    BackHandler(enabled = showLiveCopilot && state.activeReport == null) {
+        showLiveCopilot = false
+        vm.clearLiveCoach()
     }
 
     // Hardware/gesture back closes an open report or scan instead of exiting the app
@@ -177,6 +184,23 @@ fun PocketLawyerRoot(
                     )
                 },
                 onBack = { vm.closeReport() }
+            )
+        } else if (showLiveCopilot) {
+            LiveCopilotScreen(
+                coachAdvice = state.liveCoachAdvice,
+                isCoachLoading = state.isLiveCoachLoading,
+                coachError = state.liveCoachError,
+                onRequestAiCheck = { text, mode, jur -> vm.requestLiveCoach(text, mode, jur) },
+                onSaveFullAudit = { lines, mode, jur ->
+                    vm.saveLiveTranscriptToVault(lines, mode, jur) {
+                        showLiveCopilot = false
+                    }
+                },
+                onCitationClick = { citation, jur -> vm.lookupStatute(citation, jur) },
+                onClose = {
+                    showLiveCopilot = false
+                    vm.clearLiveCoach()
+                }
             )
         } else {
             Scaffold(
@@ -233,8 +257,9 @@ fun PocketLawyerRoot(
                             shareNonce = shareNonce,
                             audits = state.audits,
                             onAuditClick = { vm.openAudit(it) },
-                            onRunAudit = { url, uri, type -> vm.runAudit(context, url, uri, type) },
-                            onQueueBackgroundAudit = { url, type -> vm.queueBackgroundAudit(context, url, type) }
+                            onRunAudit = { url, uri, type, party -> vm.runAudit(context, url, uri, type, party) },
+                            onQueueBackgroundAudit = { url, type, party -> vm.queueBackgroundAudit(context, url, type, party) },
+                            onOpenLiveCopilot = { showLiveCopilot = true }
                         )
                         AppTab.SCAN -> ScanAndLettersScreen(
                             activeScan = state.activeScan,
@@ -286,6 +311,14 @@ fun PocketLawyerRoot(
 
         // Cyber HUD Analyzing Overlay
         if (state.isAnalyzing) {
+            var elapsedSec by remember { mutableIntStateOf(0) }
+            LaunchedEffect(Unit) {
+                while (true) {
+                    delay(1000)
+                    elapsedSec++
+                }
+            }
+
             Box(
                 modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.84f)),
                 contentAlignment = Alignment.Center
@@ -299,7 +332,7 @@ fun PocketLawyerRoot(
                     Column(
                         modifier = Modifier.padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         CircularProgressIndicator(color = CreamAccent, strokeWidth = 3.dp)
                         Text(
@@ -309,6 +342,20 @@ fun PocketLawyerRoot(
                             fontWeight = FontWeight.Bold,
                             color = CreamAccent
                         )
+                        Text(
+                            text = "ELAPSED: ${elapsedSec}s",
+                            fontFamily = CyberMono,
+                            fontSize = 11.sp,
+                            color = TextSecondary
+                        )
+                        OutlinedButton(
+                            onClick = { vm.cancelAudit() },
+                            shape = TacticalPillShape,
+                            border = BorderStroke(1.dp, RoseText.copy(alpha = 0.7f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = RoseText)
+                        ) {
+                            Text("CANCEL", fontFamily = CyberMono, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }

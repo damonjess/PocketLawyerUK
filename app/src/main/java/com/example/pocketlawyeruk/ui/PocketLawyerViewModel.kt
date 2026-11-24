@@ -13,6 +13,8 @@ import com.example.pocketlawyeruk.data.local.VaultMappers.toModel
 import com.example.pocketlawyeruk.model.*
 import com.example.pocketlawyeruk.ui.screens.EncounterType
 import com.example.pocketlawyeruk.worker.BackgroundAuditWorker
+import com.example.pocketlawyeruk.data.LiveCoachAdvice
+import com.example.pocketlawyeruk.data.LivePartyMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
@@ -35,6 +37,9 @@ data class PocketLawyerUiState(
     val errorMessage: String? = null,
     val qaAnswer: String? = null,
     val isAskingQa: Boolean = false,
+    val liveCoachAdvice: LiveCoachAdvice? = null,
+    val isLiveCoachLoading: Boolean = false,
+    val liveCoachError: String? = null,
     // Tap-to-Read Statute Sheet state
     val statuteSheetCitation: String? = null,
     val statuteLoading: Boolean = false,
@@ -49,6 +54,13 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
     private val audioExtractor = VideoAudioExtractor()
     private val auditService = LegalAuditService(application)
     private var statuteJob: Job? = null
+    private var auditJob: Job? = null
+
+    fun cancelAudit() {
+        auditJob?.cancel()
+        auditJob = null
+        _uiState.update { it.copy(isAnalyzing = false) }
+    }
 
     private val _uiState = MutableStateFlow(
         PocketLawyerUiState(apiKey = LegalAuditService.getStoredApiKey(application))
@@ -115,27 +127,39 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
         return true
     }
 
-    fun queueBackgroundAudit(context: Context, url: String, type: EncounterType) {
+    fun queueBackgroundAudit(
+        context: Context,
+        url: String,
+        type: EncounterType,
+        confrontingParty: ConfrontingParty = ConfrontingParty.AUTO
+    ) {
         if (!requireApiKey()) return
-        BackgroundAuditWorker.enqueue(context, url, type)
+        BackgroundAuditWorker.enqueue(context, url, type, confrontingParty)
         _uiState.update {
             it.copy(errorMessage = "Queued in background. You can leave the app — a notification will fire when the legal dossier is ready.")
         }
     }
 
-    fun runAudit(context: Context, url: String, videoUri: Uri?, encounterType: EncounterType) {
+    fun runAudit(
+        context: Context,
+        url: String,
+        videoUri: Uri?,
+        encounterType: EncounterType,
+        confrontingParty: ConfrontingParty = ConfrontingParty.AUTO
+    ) {
         if (!requireApiKey()) return
         if (videoUri == null && url.isBlank()) {
             _uiState.update { it.copy(errorMessage = "Paste a video link or load a local clip first.") }
             return
         }
 
-        viewModelScope.launch {
+        auditJob?.cancel()
+        auditJob = viewModelScope.launch {
             _uiState.update { it.copy(isAnalyzing = true, statusMessage = "INITIALISING INTERCEPT...", errorMessage = null) }
             var downloadedAudio: File? = null
             try {
                 val report = if (videoUri != null) {
-                    auditService.analyzeVideoUri(context, videoUri, url.takeIf { it.isNotBlank() }, encounterType) { status ->
+                    auditService.analyzeVideoUri(context, videoUri, url.takeIf { it.isNotBlank() }, encounterType, confrontingParty) { status ->
                         _uiState.update { it.copy(statusMessage = status.uppercase()) }
                     }
                 } else {
@@ -143,13 +167,16 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
                         _uiState.update { it.copy(statusMessage = status.uppercase()) }
                     }
                     _uiState.update { it.copy(statusMessage = "TRANSCRIBING & FACT-CHECKING UK LAW...") }
-                    auditService.analyzeAudioFile(downloadedAudio, url.trim(), encounterType) { status ->
+                    auditService.analyzeAudioFile(downloadedAudio, url.trim(), encounterType, confrontingParty) { status ->
                         _uiState.update { it.copy(statusMessage = status.uppercase()) }
                     }
                 }
 
                 db.auditDao().upsert(report.toEntity())
                 _uiState.update { it.copy(activeReport = report, isAnalyzing = false) }
+            } catch (e: CancellationException) {
+                _uiState.update { it.copy(isAnalyzing = false) }
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(isAnalyzing = false, errorMessage = e.localizedMessage ?: "Audit failed.") }
             } finally {
@@ -253,4 +280,48 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun clearChat() = viewModelScope.launch { db.chatDao().clearAll() }
+
+    fun requestLiveCoach(transcript: String, partyMode: LivePartyMode, jurisdiction: UkJurisdiction) {
+        if (!requireApiKey()) return
+        if (transcript.isBlank()) {
+            _uiState.update { it.copy(liveCoachError = "Wait for speech to appear in the transcript first.") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLiveCoachLoading = true, liveCoachError = null) }
+            try {
+                val advice = auditService.getLiveCoachAdvice(transcript, partyMode, jurisdiction)
+                _uiState.update { it.copy(liveCoachAdvice = advice, isLiveCoachLoading = false) }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLiveCoachLoading = false, liveCoachError = e.localizedMessage ?: "Live AI check failed.")
+                }
+            }
+        }
+    }
+
+    fun clearLiveCoach() {
+        _uiState.update { it.copy(liveCoachAdvice = null, liveCoachError = null, isLiveCoachLoading = false) }
+    }
+
+    fun saveLiveTranscriptToVault(
+        lines: List<TranscriptLine>,
+        partyMode: LivePartyMode,
+        jurisdiction: UkJurisdiction,
+        onSavedAndOpened: () -> Unit
+    ) {
+        if (!requireApiKey()) return
+        if (lines.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isAnalyzing = true, statusMessage = "ARCHIVING LIVE ENCOUNTER TO VAULT...", errorMessage = null) }
+            try {
+                val report = auditService.analyzeLiveTranscript(lines, partyMode, jurisdiction)
+                db.auditDao().upsert(report.toEntity())
+                _uiState.update { it.copy(activeReport = report, isAnalyzing = false, liveCoachAdvice = null) }
+                onSavedAndOpened()
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isAnalyzing = false, errorMessage = e.localizedMessage ?: "Could not save live audit.") }
+            }
+        }
+    }
 }

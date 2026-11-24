@@ -26,7 +26,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.pocketlawyeruk.model.AuditReport
+import com.example.pocketlawyeruk.model.*
 import com.example.pocketlawyeruk.ui.theme.*
 
 enum class EncounterType(val label: String, val statuteSubtitle: String) {
@@ -43,13 +43,15 @@ fun HomeScreen(
     shareNonce: Int = 0,
     audits: List<AuditReport>,
     onAuditClick: (String) -> Unit,
-    onRunAudit: (url: String, videoUri: Uri?, type: EncounterType) -> Unit,
-    onQueueBackgroundAudit: (url: String, type: EncounterType) -> Unit
+    onRunAudit: (url: String, videoUri: Uri?, type: EncounterType, party: ConfrontingParty) -> Unit,
+    onQueueBackgroundAudit: (url: String, type: EncounterType, party: ConfrontingParty) -> Unit,
+    onOpenLiveCopilot: () -> Unit = {}
 ) {
     val clipboardManager = LocalClipboardManager.current
     var linkText by remember(sharedUrl, shareNonce) { mutableStateOf(sharedUrl.orEmpty()) }
     var selectedVideoUri by remember(sharedVideoUri, shareNonce) { mutableStateOf(sharedVideoUri) }
     var selectedType by remember { mutableStateOf(EncounterType.PEDESTRIAN) }
+    var selectedParty by remember { mutableStateOf(ConfrontingParty.AUTO) }
 
     val videoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -108,6 +110,43 @@ fun HomeScreen(
                 color = TextSecondary,
                 lineHeight = 17.sp
             )
+        }
+
+        // Live Real-Time Encounter Co-Pilot Launcher
+        Surface(
+            shape = TacticalCardShape,
+            color = EmeraldBg,
+            border = BorderStroke(1.dp, EmeraldText.copy(alpha = 0.7f)),
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onOpenLiveCopilot)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(Icons.Outlined.Mic, contentDescription = null, tint = EmeraldText, modifier = Modifier.size(22.dp))
+                    Column {
+                        Text(
+                            text = "LIVE ENCOUNTER CO-PILOT",
+                            fontFamily = CyberMono,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = EmeraldText
+                        )
+                        Text(
+                            text = "Real-time UK rights alerts while listening • 0 API calls offline",
+                            fontSize = 11.sp,
+                            color = TextPrimary
+                        )
+                    }
+                }
+                Text("LAUNCH ▸", fontFamily = CyberMono, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EmeraldText)
+            }
         }
 
         // 2. Cyber Target Ingestion Card
@@ -226,6 +265,51 @@ fun HomeScreen(
                     }
                 }
 
+                // Confronting Party Lock (Police vs Staff / Security)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "WHO IS IN THE CLIP?",
+                        fontFamily = CyberMono,
+                        fontSize = 11.sp,
+                        color = TextSecondary,
+                        letterSpacing = 1.sp
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        ConfrontingParty.entries.forEach { party ->
+                            val isSelected = party == selectedParty
+                            Surface(
+                                shape = TacticalPillShape,
+                                color = if (isSelected) CreamAccent else MidnightBg,
+                                border = BorderStroke(1.dp, if (isSelected) CreamAccent else CardBorder),
+                                modifier = Modifier.weight(1f).clickable { selectedParty = party }
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = party.label.uppercase(),
+                                        fontFamily = CyberMono,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (isSelected) CreamTextDark else TextPrimary,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Text(
+                        text = "▸ ${selectedParty.hint}",
+                        fontFamily = CyberMono,
+                        fontSize = 11.sp,
+                        color = if (selectedParty == ConfrontingParty.AUTO) TextSecondary else EmeraldText
+                    )
+                }
+
                 // Encounter Category Selector
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("CLASSIFICATION HINT", fontFamily = CyberMono, fontSize = 11.sp, color = TextSecondary, letterSpacing = 1.sp)
@@ -260,7 +344,7 @@ fun HomeScreen(
                 // Dual Action Row: Run Now + Queue in Background
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        onClick = { onRunAudit(linkText, selectedVideoUri, selectedType) },
+                        onClick = { onRunAudit(linkText, selectedVideoUri, selectedType, selectedParty) },
                         enabled = canRunAudit,
                         modifier = Modifier.weight(1f).height(50.dp),
                         shape = TacticalPillShape,
@@ -278,7 +362,7 @@ fun HomeScreen(
 
                     if (linkText.isNotBlank() && selectedVideoUri == null) {
                         OutlinedButton(
-                            onClick = { onQueueBackgroundAudit(linkText, selectedType) },
+                            onClick = { onQueueBackgroundAudit(linkText, selectedType, selectedParty) },
                             modifier = Modifier.height(50.dp),
                             shape = TacticalPillShape,
                             border = BorderStroke(1.dp, EmeraldText),

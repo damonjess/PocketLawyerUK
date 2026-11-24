@@ -14,6 +14,7 @@ import com.example.pocketlawyeruk.data.VideoAudioExtractor
 import com.example.pocketlawyeruk.data.local.PocketLawyerDatabase
 import com.example.pocketlawyeruk.data.local.VaultMappers.toEntity
 import com.example.pocketlawyeruk.ui.screens.EncounterType
+import com.example.pocketlawyeruk.model.ConfrontingParty
 import java.io.File
 
 class BackgroundAuditWorker(
@@ -25,6 +26,9 @@ class BackgroundAuditWorker(
         val url = inputData.getString(KEY_URL)?.takeIf { it.isNotBlank() } ?: return Result.failure()
         val typeName = inputData.getString(KEY_ENCOUNTER_TYPE) ?: EncounterType.PEDESTRIAN.name
         val encounterType = runCatching { EncounterType.valueOf(typeName) }.getOrDefault(EncounterType.PEDESTRIAN)
+        
+        val partyName = inputData.getString(KEY_CONFRONTING_PARTY) ?: ConfrontingParty.AUTO.name
+        val confrontingParty = runCatching { ConfrontingParty.valueOf(partyName) }.getOrDefault(ConfrontingParty.AUTO)
 
         ensureChannel()
         if (LegalAuditService.getStoredApiKey(applicationContext).isBlank()) {
@@ -45,7 +49,8 @@ class BackgroundAuditWorker(
             val report = service.analyzeAudioFile(
                 audioFile = downloadedAudio,
                 sourceUrl = url,
-                encounterType = encounterType
+                encounterType = encounterType,
+                confrontingParty = confrontingParty
             )
 
             // Save offline to Room Vault
@@ -121,15 +126,22 @@ class BackgroundAuditWorker(
     companion object {
         const val KEY_URL = "audit_url"
         const val KEY_ENCOUNTER_TYPE = "encounter_type"
+        const val KEY_CONFRONTING_PARTY = "confronting_party"
         const val EXTRA_OPEN_AUDIT_ID = "open_audit_id"
         private const val CHANNEL_ID = "pocket_lawyer_audits"
 
-        fun enqueue(context: Context, url: String, encounterType: EncounterType) {
+        fun enqueue(
+            context: Context,
+            url: String,
+            encounterType: EncounterType,
+            confrontingParty: ConfrontingParty = ConfrontingParty.AUTO
+        ) {
             val request = OneTimeWorkRequestBuilder<BackgroundAuditWorker>()
                 .setInputData(
                     workDataOf(
                         KEY_URL to url,
-                        KEY_ENCOUNTER_TYPE to encounterType.name
+                        KEY_ENCOUNTER_TYPE to encounterType.name,
+                        KEY_CONFRONTING_PARTY to confrontingParty.name
                     )
                 )
                 .setConstraints(
