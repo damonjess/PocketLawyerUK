@@ -35,6 +35,9 @@ import com.example.pocketlawyeruk.worker.BackgroundAuditWorker
 
 private enum class AppTab { AUDIT, SCAN, CHAT, VAULT }
 
+private const val STATE_SHARED_URL = "state_shared_url"
+private const val STATE_SHARED_VIDEO = "state_shared_video"
+
 class MainActivity : ComponentActivity() {
 
     private var incomingUrlState by mutableStateOf<String?>(null)
@@ -47,7 +50,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestNotificationPermissionIfNeeded()
-        handleIncomingIntent(intent)
+
+        // Only consume the launch intent once. Re-processing ACTION_SEND on rotation
+        // would replay the share and close any report the user has open.
+        if (savedInstanceState == null) {
+            handleIncomingIntent(intent)
+        } else {
+            incomingUrlState = savedInstanceState.getString(STATE_SHARED_URL)
+            incomingVideoState = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                savedInstanceState.getParcelable(STATE_SHARED_VIDEO, Uri::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                savedInstanceState.getParcelable(STATE_SHARED_VIDEO)
+            }
+        }
 
         setContent {
             PocketLawyerTheme {
@@ -60,6 +76,12 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString(STATE_SHARED_URL, incomingUrlState)
+        outState.putParcelable(STATE_SHARED_VIDEO, incomingVideoState)
     }
 
     override fun onNewIntent(intent: Intent) {
