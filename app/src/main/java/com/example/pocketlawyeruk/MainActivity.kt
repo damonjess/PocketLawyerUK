@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -39,6 +40,7 @@ class MainActivity : ComponentActivity() {
     private var incomingUrlState by mutableStateOf<String?>(null)
     private var incomingVideoState by mutableStateOf<Uri?>(null)
     private var openAuditIdState by mutableStateOf<String?>(null)
+    private var shareNonce by mutableIntStateOf(0)
 
     private val notifPermLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
@@ -52,6 +54,7 @@ class MainActivity : ComponentActivity() {
                 PocketLawyerRoot(
                     sharedUrl = incomingUrlState,
                     sharedVideoUri = incomingVideoState,
+                    shareNonce = shareNonce,
                     openAuditId = openAuditIdState,
                     onConsumedOpenAudit = { openAuditIdState = null }
                 )
@@ -74,6 +77,8 @@ class MainActivity : ComponentActivity() {
 
         if (intent.action == Intent.ACTION_SEND && intent.type == "text/plain") {
             incomingUrlState = intent.getStringExtra(Intent.EXTRA_TEXT)
+            incomingVideoState = null
+            shareNonce++
         } else if (intent.action == Intent.ACTION_SEND && intent.type?.startsWith("video/") == true) {
             incomingVideoState = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
@@ -81,6 +86,8 @@ class MainActivity : ComponentActivity() {
                 @Suppress("DEPRECATION")
                 intent.getParcelableExtra(Intent.EXTRA_STREAM)
             }
+            incomingUrlState = null
+            shareNonce++
         }
     }
 
@@ -96,6 +103,7 @@ class MainActivity : ComponentActivity() {
 fun PocketLawyerRoot(
     sharedUrl: String?,
     sharedVideoUri: Uri?,
+    shareNonce: Int,
     openAuditId: String?,
     onConsumedOpenAudit: () -> Unit,
     vm: PocketLawyerViewModel = viewModel()
@@ -112,9 +120,18 @@ fun PocketLawyerRoot(
         }
     }
 
-    // Jump to Audit tab when a new TikTok/YouTube link is shared into the app
-    LaunchedEffect(sharedUrl, sharedVideoUri) {
-        if (sharedUrl != null || sharedVideoUri != null) {
+    // Hardware/gesture back closes an open report or scan instead of exiting the app
+    BackHandler(enabled = state.activeReport != null) {
+        vm.closeReport()
+    }
+    BackHandler(enabled = state.activeReport == null && currentTab == AppTab.SCAN && state.activeScan != null) {
+        vm.clearActiveScan()
+    }
+
+    // Close any open dossier and jump to Audit whenever a new link or video is shared in
+    LaunchedEffect(shareNonce) {
+        if (shareNonce > 0 && (sharedUrl != null || sharedVideoUri != null)) {
+            vm.closeReport()
             currentTab = AppTab.AUDIT
         }
     }
@@ -191,6 +208,7 @@ fun PocketLawyerRoot(
                         AppTab.AUDIT -> HomeScreen(
                             sharedUrl = sharedUrl,
                             sharedVideoUri = sharedVideoUri,
+                            shareNonce = shareNonce,
                             audits = state.audits,
                             onAuditClick = { vm.openAudit(it) },
                             onRunAudit = { url, uri, type -> vm.runAudit(context, url, uri, type) },

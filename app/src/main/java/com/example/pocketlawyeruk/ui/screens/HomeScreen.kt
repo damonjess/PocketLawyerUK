@@ -40,19 +40,25 @@ enum class EncounterType(val label: String, val statuteSubtitle: String) {
 fun HomeScreen(
     sharedUrl: String? = null,
     sharedVideoUri: Uri? = null,
+    shareNonce: Int = 0,
     audits: List<AuditReport>,
     onAuditClick: (String) -> Unit,
     onRunAudit: (url: String, videoUri: Uri?, type: EncounterType) -> Unit,
     onQueueBackgroundAudit: (url: String, type: EncounterType) -> Unit
 ) {
     val clipboardManager = LocalClipboardManager.current
-    var linkText by remember(sharedUrl) { mutableStateOf(sharedUrl.orEmpty()) }
-    var selectedVideoUri by remember(sharedVideoUri) { mutableStateOf(sharedVideoUri) }
+    var linkText by remember(sharedUrl, shareNonce) { mutableStateOf(sharedUrl.orEmpty()) }
+    var selectedVideoUri by remember(sharedVideoUri, shareNonce) { mutableStateOf(sharedVideoUri) }
     var selectedType by remember { mutableStateOf(EncounterType.PEDESTRIAN) }
 
     val videoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri -> if (uri != null) selectedVideoUri = uri }
+    ) { uri ->
+        if (uri != null) {
+            selectedVideoUri = uri
+            linkText = ""
+        }
+    }
 
     val canRunAudit = linkText.isNotBlank() || selectedVideoUri != null
 
@@ -135,7 +141,10 @@ fun HomeScreen(
                 ) {
                     TextField(
                         value = linkText,
-                        onValueChange = { linkText = it },
+                        onValueChange = { newText ->
+                            linkText = newText
+                            if (newText.isNotBlank()) selectedVideoUri = null
+                        },
                         placeholder = {
                             Text("TikTok / YouTube / Reels URL...", fontFamily = CyberMono, fontSize = 12.sp, color = TextSecondary, maxLines = 1)
                         },
@@ -150,8 +159,21 @@ fun HomeScreen(
                         ),
                         modifier = Modifier.weight(1f)
                     )
+                    if (linkText.isNotBlank()) {
+                        IconButton(
+                            onClick = { linkText = "" },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Outlined.Close, contentDescription = "Clear link", tint = TextSecondary, modifier = Modifier.size(16.dp))
+                        }
+                    }
                     Button(
-                        onClick = { clipboardManager.getText()?.text?.let { linkText = it } },
+                        onClick = {
+                            clipboardManager.getText()?.text?.let {
+                                linkText = it
+                                selectedVideoUri = null
+                            }
+                        },
                         shape = TacticalPillShape,
                         colors = ButtonDefaults.buttonColors(containerColor = CreamAccent, contentColor = CreamTextDark),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
@@ -177,11 +199,31 @@ fun HomeScreen(
                     Icon(Icons.Outlined.UploadFile, contentDescription = null, modifier = Modifier.size(17.dp))
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = if (selectedVideoUri != null) "LOCAL CLIP LOCKED [✓]" else "LOAD LOCAL VIDEO FILE",
+                        text = if (selectedVideoUri != null) "REPLACE LOCAL VIDEO FILE" else "LOAD LOCAL VIDEO FILE",
                         fontFamily = CyberMono,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     )
+                }
+
+                if (selectedVideoUri != null) {
+                    Surface(shape = TacticalPillShape, color = EmeraldBg, border = BorderStroke(1.dp, EmeraldText)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("LOCAL CLIP LOCKED [✓]", fontFamily = CyberMono, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EmeraldText)
+                            Text(
+                                text = "CLEAR",
+                                fontFamily = CyberMono,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = RoseText,
+                                modifier = Modifier.clickable { selectedVideoUri = null }
+                            )
+                        }
+                    }
                 }
 
                 // Encounter Category Selector

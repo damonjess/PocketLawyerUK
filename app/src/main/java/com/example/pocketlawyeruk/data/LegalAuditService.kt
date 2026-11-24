@@ -176,7 +176,7 @@ class LegalAuditService(
             }))
             put("safetySettings", buildPermissiveSafetySettings())
             put("generationConfig", JSONObject().apply {
-                put("maxOutputTokens", 8192)
+                put("maxOutputTokens", 16384)
                 put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
             })
         }
@@ -413,6 +413,11 @@ class LegalAuditService(
                         return@use
                     }
 
+                    // Fail fast on bad/expired API keys (Gemini returns 400 API_KEY_INVALID, 401, or 403)
+                    if (resp.code == 401 || (resp.code in listOf(400, 403) && isInvalidApiKeyResponse(body))) {
+                        throw IllegalStateException(INVALID_KEY_MESSAGE)
+                    }
+
                     // Fail over on quota (429), missing model (404), server busy (500/503), or param mismatch (400)
                     if (resp.code in listOf(400, 404, 429, 500, 503)) {
                         val shortMsg = runCatching {
@@ -422,7 +427,6 @@ class LegalAuditService(
                         return@use
                     }
 
-                    if (resp.code == 401) throw IllegalStateException(INVALID_KEY_MESSAGE)
                     if (resp.code == 402) throw IllegalStateException(
                         "Billing is not active for this project (402): prepayment credits are depleted. Add credits at aistudio.google.com/billing, or unlink the billing account in Google Cloud Console to use the free tier."
                     )
@@ -438,6 +442,11 @@ class LegalAuditService(
             "All models failed:\n" + errors.joinToString("\n")
         )
     }
+
+    private fun isInvalidApiKeyResponse(body: String): Boolean =
+        body.contains("API_KEY_INVALID", ignoreCase = true) ||
+            body.contains("API key not valid", ignoreCase = true) ||
+            body.contains("API key expired", ignoreCase = true)
 
     private fun apiErrorMessage(body: String): String =
         runCatching { JSONObject(body).getJSONObject("error").optString("message") }
@@ -765,7 +774,8 @@ class LegalAuditService(
         private val UK_GENERAL_LAW_PROMPT = """
             You are Pocket Lawyer UK, a plain-English legal assistant specializing strictly in UK law (defaulting to England & Wales unless Scotland or Northern Ireland is specified).
             Note current UK law as of late 2026 (including the Renters' Rights Act 2025 in England abolishing Section 21 from 1 May 2026).
-            Always verify current legislation via Google Search, cite exact Acts and sections, lead with a direct answer, use concise bullet points, and list practical next steps (Citizens Advice, ACAS, Ombudsman, or solicitor).
+            Cite exact Acts and sections accurately from UK statute knowledge (and clearly note if a very recent change or local byelaw should be double-checked on gov.uk or legislation.gov.uk).
+            Lead with a direct answer, use concise bullet points, and list practical next steps (Citizens Advice, ACAS, Ombudsman, or solicitor).
             Respond in clean plain text only — never output raw HTML tags.
         """.trimIndent()
     }

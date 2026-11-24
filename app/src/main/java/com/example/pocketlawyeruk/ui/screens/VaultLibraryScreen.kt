@@ -67,6 +67,21 @@ fun VaultLibraryScreen(
         }
     }
 
+    val filteredScans = remember(scans, searchQuery) {
+        if (searchQuery.isBlank()) scans
+        else scans.filter { s ->
+            s.title.contains(searchQuery, true) ||
+                s.documentType.contains(searchQuery, true) ||
+                s.summary.contains(searchQuery, true) ||
+                s.appealOrReplyLetter.contains(searchQuery, true) ||
+                s.redFlags.any {
+                    it.clause.contains(searchQuery, true) ||
+                        it.issue.contains(searchQuery, true) ||
+                        it.citation.contains(searchQuery, true)
+                }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -143,10 +158,16 @@ fun VaultLibraryScreen(
             }
 
             VaultTab.SCANS -> {
-                if (scans.isEmpty()) {
-                    Text("No scanned fines, notices, or contracts saved yet.", fontFamily = CyberMono, fontSize = 12.sp, color = TextSecondary)
+                if (filteredScans.isEmpty()) {
+                    Text(
+                        text = if (searchQuery.isBlank()) "No scanned fines, notices, or contracts saved yet."
+                        else "No matching document scans in your offline vault.",
+                        fontFamily = CyberMono,
+                        fontSize = 12.sp,
+                        color = TextSecondary
+                    )
                 } else {
-                    scans.forEach { scan ->
+                    filteredScans.forEach { scan ->
                         Surface(
                             shape = TacticalCardShape,
                             color = CardSurface,

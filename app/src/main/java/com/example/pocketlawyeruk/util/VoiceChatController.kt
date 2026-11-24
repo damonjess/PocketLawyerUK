@@ -17,6 +17,7 @@ class VoiceChatController(private val context: Context) {
     private var speechRecognizer: SpeechRecognizer? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    private var released = false
 
     // Speech requested before the engine finished starting (or while it is being replaced).
     private var pendingSpeech: String? = null
@@ -28,6 +29,12 @@ class VoiceChatController(private val context: Context) {
 
     /** Invoked on the main thread when speech cannot be played, so the UI can explain why. */
     var onTtsError: ((String) -> Unit)? = null
+
+    private fun notifyError(message: String) {
+        handler.post {
+            if (!released) onTtsError?.invoke(message)
+        }
+    }
 
     init {
         initNextEngine()
@@ -54,11 +61,12 @@ class VoiceChatController(private val context: Context) {
         runCatching { context.packageManager.getPackageInfo(pkg, 0); true }.getOrDefault(false)
 
     private fun initNextEngine() {
+        if (released) return
         android.util.Log.d("VoiceChatController", "initNextEngine: index=$candidateIndex, candidates=${candidates.size}")
         if (candidateIndex >= candidates.size) {
             ttsReady = false
             pendingSpeech = null
-            onTtsError?.invoke(
+            notifyError(
                 "Text-to-speech isn't set up on this phone. Open Settings > Accessibility > Text-to-speech, install a voice, then tap SPEAK again."
             )
             return
@@ -76,35 +84,37 @@ class VoiceChatController(private val context: Context) {
 
         // Some devices never call back when no default engine is configured; don't hang forever.
         handler.postDelayed(
-            { if (token == initToken && !ttsReady) initNextEngine() },
+            { if (!released && token == initToken && !ttsReady) initNextEngine() },
             6000
         )
     }
 
     private fun onTtsInit(status: Int, token: Int) {
-        android.util.Log.d("VoiceChatController", "onTtsInit: status=$status, token=$token, initToken=$initToken")
-        if (token != initToken) return
-        if (status == TextToSpeech.SUCCESS) {
-            val engineInstance = tts ?: return initNextEngine()
-            val ukResult = engineInstance.setLanguage(Locale.UK)
-            android.util.Log.d("VoiceChatController", "setLanguage(UK) result=$ukResult")
-            if (ukResult == TextToSpeech.LANG_MISSING_DATA || ukResult == TextToSpeech.LANG_NOT_SUPPORTED) {
-                engineInstance.language = Locale.ENGLISH
+        handler.post {
+            if (released || token != initToken) return@post
+            android.util.Log.d("VoiceChatController", "onTtsInit: status=$status, token=$token, initToken=$initToken")
+            if (status == TextToSpeech.SUCCESS) {
+                val engineInstance = tts ?: return@post initNextEngine()
+                val ukResult = engineInstance.setLanguage(Locale.UK)
+                android.util.Log.d("VoiceChatController", "setLanguage(UK) result=$ukResult")
+                if (ukResult == TextToSpeech.LANG_MISSING_DATA || ukResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    engineInstance.language = Locale.ENGLISH
+                }
+                engineInstance.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                ttsReady = true
+                pendingSpeech?.let { text ->
+                    pendingSpeech = null
+                    speakNow(text)
+                }
+                return@post
             }
-            engineInstance.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-            )
-            ttsReady = true
-            pendingSpeech?.let { text ->
-                pendingSpeech = null
-                speakNow(text)
-            }
-            return
+            initNextEngine()
         }
-        initNextEngine()
     }
 
     fun startListening(
@@ -155,8 +165,8 @@ class VoiceChatController(private val context: Context) {
     }
 
     fun speak(text: String) {
+        if (released || text.isBlank()) return
         android.util.Log.d("VoiceChatController", "speak: length=${text.length}, ttsReady=$ttsReady")
-        if (text.isBlank()) return
         if (!ttsReady) {
             // Engine may still be starting; queue instead of silently dropping the request.
             pendingSpeech = text
@@ -183,7 +193,7 @@ class VoiceChatController(private val context: Context) {
             val result = tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "pocket_lawyer_tts")
             android.util.Log.d("VoiceChatController", "speakNow: result=$result")
             if (result == null || result == TextToSpeech.ERROR) {
-                onTtsError?.invoke("Couldn't play speech. Check your text-to-speech engine and media volume.")
+                notifyError("Couldn't play speech. Check your text-to-speech engine and media volume.")
             }
         }
     }
@@ -193,6 +203,7 @@ class VoiceChatController(private val context: Context) {
     }
 
     fun release() {
+        released = true
         handler.removeCallbacksAndMessages(null)
         speechRecognizer?.destroy()
         tts?.stop()

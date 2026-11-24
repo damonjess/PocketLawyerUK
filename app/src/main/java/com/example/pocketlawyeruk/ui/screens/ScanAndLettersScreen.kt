@@ -40,11 +40,17 @@ fun ScanAndLettersScreen(
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    val scrollState = rememberScrollState()
 
     var selectedDocUri by remember { mutableStateOf<Uri?>(null) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var pastedSmallPrint by remember { mutableStateOf("") }
     var contextNote by remember { mutableStateOf("") }
+
+    // Scroll to the top whenever a saved or freshly completed scan opens
+    LaunchedEffect(activeScan?.id) {
+        if (activeScan != null) scrollState.animateScrollTo(0)
+    }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
         if (success && pendingCameraUri != null) selectedDocUri = pendingCameraUri
@@ -58,7 +64,7 @@ fun ScanAndLettersScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MidnightBg)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(scrollState)
             .padding(horizontal = 18.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -72,114 +78,6 @@ fun ScanAndLettersScreen(
                 color = TextSecondary,
                 lineHeight = 17.sp
             )
-        }
-
-        // Input Panel
-        Surface(shape = TacticalCardShape, color = CardSurface, border = BorderStroke(1.dp, CreamAccent.copy(alpha = 0.4f))) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = {
-                            val dir = File(context.cacheDir, "scans").apply { mkdirs() }
-                            val file = File(dir, "scan_${UUID.randomUUID()}.jpg")
-                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-                            pendingCameraUri = uri
-                            cameraLauncher.launch(uri)
-                        },
-                        modifier = Modifier.weight(1f).height(48.dp),
-                        shape = TacticalPillShape,
-                        border = BorderStroke(1.dp, CreamAccent),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = CreamAccent)
-                    ) {
-                        Icon(Icons.Outlined.PhotoCamera, contentDescription = null, modifier = Modifier.size(17.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("PHOTO", fontFamily = CyberMono, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    OutlinedButton(
-                        onClick = { filePicker.launch(arrayOf("image/*", "application/pdf")) },
-                        modifier = Modifier.weight(1f).height(48.dp),
-                        shape = TacticalPillShape,
-                        border = BorderStroke(1.dp, CardBorder),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
-                    ) {
-                        Icon(Icons.Outlined.Description, contentDescription = null, modifier = Modifier.size(17.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("PDF / IMG", fontFamily = CyberMono, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                if (selectedDocUri != null) {
-                    Surface(shape = TacticalPillShape, color = EmeraldBg, border = BorderStroke(1.dp, EmeraldText)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("DOCUMENT ATTACHED [✓]", fontFamily = CyberMono, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EmeraldText)
-                            Text("CLEAR", fontFamily = CyberMono, fontSize = 11.sp, color = RoseText, modifier = Modifier.clickable { selectedDocUri = null })
-                        }
-                    }
-                }
-
-                OutlinedTextField(
-                    value = pastedSmallPrint,
-                    onValueChange = { pastedSmallPrint = it },
-                    label = { Text("Or paste contract / T&Cs / letter text", fontSize = 12.sp, color = TextSecondary) },
-                    minLines = 3,
-                    maxLines = 6,
-                    shape = TacticalPillShape,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = CreamAccent,
-                        unfocusedBorderColor = CardBorder,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary,
-                        focusedContainerColor = MidnightBg,
-                        unfocusedContainerColor = MidnightBg
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                OutlinedTextField(
-                    value = contextNote,
-                    onValueChange = { contextNote = it },
-                    label = { Text("Extra details (e.g. received 19 days late, faulty after 20 days)", fontSize = 12.sp, color = TextSecondary) },
-                    singleLine = true,
-                    shape = TacticalPillShape,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = CreamAccent,
-                        unfocusedBorderColor = CardBorder,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary,
-                        focusedContainerColor = MidnightBg,
-                        unfocusedContainerColor = MidnightBg
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Button(
-                    onClick = { onAnalyzeDocument(selectedDocUri, pastedSmallPrint.takeIf { it.isNotBlank() }, contextNote) },
-                    enabled = !isScanning && (selectedDocUri != null || pastedSmallPrint.isNotBlank()),
-                    modifier = Modifier.fillMaxWidth().height(50.dp),
-                    shape = TacticalPillShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = CreamAccent,
-                        contentColor = CreamTextDark,
-                        disabledContainerColor = MutedButtonBg,
-                        disabledContentColor = TextSecondary
-                    )
-                ) {
-                    if (isScanning) {
-                        CircularProgressIndicator(color = CreamTextDark, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("SCANNING CLAUSES...", fontFamily = CyberMono, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    } else {
-                        Icon(Icons.Outlined.DocumentScanner, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("AUDIT DOCUMENT & DRAFT LETTER", fontFamily = CyberMono, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    }
-                }
-            }
         }
 
         // Active Scan Result + Editable Appeal Letter + PDF Exporter
@@ -285,6 +183,113 @@ fun ScanAndLettersScreen(
                             Spacer(Modifier.width(4.dp))
                             Text("COPY", fontFamily = CyberMono, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         }
+                    }
+                }
+            }
+        }
+        // Input Panel
+        Surface(shape = TacticalCardShape, color = CardSurface, border = BorderStroke(1.dp, CreamAccent.copy(alpha = 0.4f))) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = {
+                            val dir = File(context.cacheDir, "scans").apply { mkdirs() }
+                            val file = File(dir, "scan_${UUID.randomUUID()}.jpg")
+                            val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                            pendingCameraUri = uri
+                            cameraLauncher.launch(uri)
+                        },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = TacticalPillShape,
+                        border = BorderStroke(1.dp, CreamAccent),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = CreamAccent)
+                    ) {
+                        Icon(Icons.Outlined.PhotoCamera, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("PHOTO", fontFamily = CyberMono, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = { filePicker.launch(arrayOf("image/*", "application/pdf")) },
+                        modifier = Modifier.weight(1f).height(48.dp),
+                        shape = TacticalPillShape,
+                        border = BorderStroke(1.dp, CardBorder),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
+                    ) {
+                        Icon(Icons.Outlined.Description, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("PDF / IMG", fontFamily = CyberMono, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                if (selectedDocUri != null) {
+                    Surface(shape = TacticalPillShape, color = EmeraldBg, border = BorderStroke(1.dp, EmeraldText)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("DOCUMENT ATTACHED [✓]", fontFamily = CyberMono, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EmeraldText)
+                            Text("CLEAR", fontFamily = CyberMono, fontSize = 11.sp, color = RoseText, modifier = Modifier.clickable { selectedDocUri = null })
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = pastedSmallPrint,
+                    onValueChange = { pastedSmallPrint = it },
+                    label = { Text("Or paste contract / T&Cs / letter text", fontSize = 12.sp, color = TextSecondary) },
+                    minLines = 3,
+                    maxLines = 6,
+                    shape = TacticalPillShape,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = CreamAccent,
+                        unfocusedBorderColor = CardBorder,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedContainerColor = MidnightBg,
+                        unfocusedContainerColor = MidnightBg
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = contextNote,
+                    onValueChange = { contextNote = it },
+                    label = { Text("Extra details (e.g. received 19 days late, faulty after 20 days)", fontSize = 12.sp, color = TextSecondary) },
+                    singleLine = true,
+                    shape = TacticalPillShape,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = CreamAccent,
+                        unfocusedBorderColor = CardBorder,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedContainerColor = MidnightBg,
+                        unfocusedContainerColor = MidnightBg
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Button(
+                    onClick = { onAnalyzeDocument(selectedDocUri, pastedSmallPrint.takeIf { it.isNotBlank() }, contextNote) },
+                    enabled = !isScanning && (selectedDocUri != null || pastedSmallPrint.isNotBlank()),
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    shape = TacticalPillShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CreamAccent,
+                        contentColor = CreamTextDark,
+                        disabledContainerColor = MutedButtonBg,
+                        disabledContentColor = TextSecondary
+                    )
+                ) {
+                    if (isScanning) {
+                        CircularProgressIndicator(color = CreamTextDark, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("SCANNING CLAUSES...", fontFamily = CyberMono, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    } else {
+                        Icon(Icons.Outlined.DocumentScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("AUDIT DOCUMENT & DRAFT LETTER", fontFamily = CyberMono, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }

@@ -107,7 +107,16 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
     fun deleteScan(id: String) = viewModelScope.launch { db.documentScanDao().deleteById(id) }
     fun deleteBookmark(id: String) = viewModelScope.launch { db.bookmarkDao().deleteById(id) }
 
+    private fun requireApiKey(): Boolean {
+        if (_uiState.value.apiKey.isBlank()) {
+            _uiState.update { it.copy(errorMessage = LegalAuditService.MISSING_KEY_MESSAGE) }
+            return false
+        }
+        return true
+    }
+
     fun queueBackgroundAudit(context: Context, url: String, type: EncounterType) {
+        if (!requireApiKey()) return
         BackgroundAuditWorker.enqueue(context, url, type)
         _uiState.update {
             it.copy(errorMessage = "Queued in background. You can leave the app — a notification will fire when the legal dossier is ready.")
@@ -115,6 +124,7 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun runAudit(context: Context, url: String, videoUri: Uri?, encounterType: EncounterType) {
+        if (!requireApiKey()) return
         if (videoUri == null && url.isBlank()) {
             _uiState.update { it.copy(errorMessage = "Paste a video link or load a local clip first.") }
             return
@@ -149,6 +159,7 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun analyzeDocument(context: Context, uri: Uri?, pastedText: String?, note: String) {
+        if (!requireApiKey()) return
         viewModelScope.launch {
             _uiState.update { it.copy(isScanningDocument = true, errorMessage = null) }
             try {
@@ -162,6 +173,17 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun lookupStatute(citation: String, jurisdiction: UkJurisdiction) {
+        if (_uiState.value.apiKey.isBlank()) {
+            _uiState.update {
+                it.copy(
+                    statuteSheetCitation = citation,
+                    statuteLoading = false,
+                    statuteResult = null,
+                    statuteError = LegalAuditService.MISSING_KEY_MESSAGE
+                )
+            }
+            return
+        }
         statuteJob?.cancel()
         statuteJob = viewModelScope.launch {
             _uiState.update {
@@ -197,6 +219,7 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun askFollowUp(question: String) {
+        if (!requireApiKey()) return
         val current = _uiState.value.activeReport ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isAskingQa = true) }
@@ -210,10 +233,7 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
     }
 
     fun sendChatMessage(text: String) {
-        if (_uiState.value.apiKey.isBlank()) {
-            _uiState.update { it.copy(errorMessage = LegalAuditService.MISSING_KEY_MESSAGE) }
-            return
-        }
+        if (!requireApiKey()) return
         val userMsg = ChatMessage(isUser = true, text = text)
         val historyWithUser = _uiState.value.chatMessages + userMsg
         _uiState.update { it.copy(isChatLoading = true) }

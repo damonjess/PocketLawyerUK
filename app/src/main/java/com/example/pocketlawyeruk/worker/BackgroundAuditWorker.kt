@@ -27,6 +27,15 @@ class BackgroundAuditWorker(
         val encounterType = runCatching { EncounterType.valueOf(typeName) }.getOrDefault(EncounterType.PEDESTRIAN)
 
         ensureChannel()
+        if (LegalAuditService.getStoredApiKey(applicationContext).isBlank()) {
+            postCompletionNotification(
+                auditId = null,
+                title = "Background Audit Skipped",
+                body = LegalAuditService.MISSING_KEY_MESSAGE
+            )
+            return Result.failure()
+        }
+
         val extractor = VideoAudioExtractor()
         val service = LegalAuditService(applicationContext)
         var downloadedAudio: File? = null
@@ -44,10 +53,20 @@ class BackgroundAuditWorker(
                 .auditDao()
                 .upsert(report.toEntity())
 
+            val flagSummary = buildList {
+                if (report.officerViolationCount > 0 || report.staffViolationCount == 0) {
+                    add("${report.officerViolationCount} officer flags")
+                }
+                if (report.staffViolationCount > 0) {
+                    add("${report.staffViolationCount} staff flags")
+                }
+                add("${report.publicMythCount} myths")
+            }.joinToString(", ")
+
             postCompletionNotification(
                 auditId = report.id,
                 title = "Audit Ready: ${report.complianceScore}% Compliance",
-                body = "${report.title} (${report.jurisdiction.displayName}) • ${report.officerViolationCount} officer flags, ${report.publicMythCount} public myths."
+                body = "${report.title} (${report.jurisdiction.displayName}) • $flagSummary."
             )
             Result.success()
         } catch (e: Exception) {
