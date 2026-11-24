@@ -158,12 +158,12 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
         }
     }
 
-    fun analyzeDocument(context: Context, uri: Uri?, pastedText: String?, note: String) {
+    fun analyzeDocument(context: Context, uris: List<Uri>, pastedText: String?, note: String) {
         if (!requireApiKey()) return
         viewModelScope.launch {
             _uiState.update { it.copy(isScanningDocument = true, errorMessage = null) }
             try {
-                val result = auditService.analyzeDocumentOrText(context, uri, pastedText, note)
+                val result = auditService.analyzeDocumentOrText(context, uris, pastedText, note)
                 db.documentScanDao().upsert(result.toEntity())
                 _uiState.update { it.copy(activeScan = result, isScanningDocument = false) }
             } catch (e: Exception) {

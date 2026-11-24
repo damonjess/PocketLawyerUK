@@ -30,11 +30,12 @@ import com.example.pocketlawyeruk.util.PdfLetterExporter
 import java.io.File
 import java.util.UUID
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ScanAndLettersScreen(
     activeScan: DocumentScanResult?,
     isScanning: Boolean,
-    onAnalyzeDocument: (uri: Uri?, pastedText: String?, note: String) -> Unit,
+    onAnalyzeDocument: (uris: List<Uri>, pastedText: String?, note: String) -> Unit,
     onCitationClick: (String, UkJurisdiction) -> Unit,
     onClearActiveScan: () -> Unit
 ) {
@@ -42,22 +43,29 @@ fun ScanAndLettersScreen(
     val clipboard = LocalClipboardManager.current
     val scrollState = rememberScrollState()
 
-    var selectedDocUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedDocUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var pastedSmallPrint by remember { mutableStateOf("") }
     var contextNote by remember { mutableStateOf("") }
 
-    // Scroll to the top whenever a saved or freshly completed scan opens
     LaunchedEffect(activeScan?.id) {
-        if (activeScan != null) scrollState.animateScrollTo(0)
+        if (activeScan != null) {
+            scrollState.animateScrollTo(0)
+        }
     }
 
     val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-        if (success && pendingCameraUri != null) selectedDocUri = pendingCameraUri
+        if (success) {
+            pendingCameraUri?.let { uri ->
+                selectedDocUris = selectedDocUris + uri
+            }
+        }
     }
 
-    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) selectedDocUri = uri
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
+            selectedDocUris = (selectedDocUris + uris).distinct()
+        }
     }
 
     Column(
@@ -71,16 +79,16 @@ fun ScanAndLettersScreen(
         // Header
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("MODULE // DOC-SCANNER & APPEAL ENGINE", fontFamily = CyberMono, fontSize = 11.sp, color = CreamAccent, letterSpacing = 1.2.sp)
-            Text("SCAN FINES & SMALL PRINT", fontFamily = CyberMono, fontSize = 21.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+            Text("SCAN CONTRACTS, FINES & LETTERS", fontFamily = CyberMono, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
             Text(
-                text = "Check NIPs, parking PCNs, landlord notices, employment letters, or pasted T&Cs for UK statutory breaches and export an A4 PDF reply.",
+                text = "Check employment contracts, dismissal letters, NIPs, PCNs, landlord notices, or T&Cs against UK law and export an A4 PDF reply.",
                 fontSize = 12.sp,
                 color = TextSecondary,
                 lineHeight = 17.sp
             )
         }
 
-        // Active Scan Result + Editable Appeal Letter + PDF Exporter
+        // Active Scan Result shown first
         if (activeScan != null) {
             var editableLetter by remember(activeScan.id) { mutableStateOf(activeScan.appealOrReplyLetter) }
 
@@ -187,9 +195,18 @@ fun ScanAndLettersScreen(
                 }
             }
         }
+
         // Input Panel
         Surface(shape = TacticalCardShape, color = CardSurface, border = BorderStroke(1.dp, CreamAccent.copy(alpha = 0.4f))) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = if (activeScan != null) "[ NEW DOCUMENT SCAN ]" else "[ INGEST CONTRACT, LETTER OR SMALL PRINT ]",
+                    fontFamily = CyberMono,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = CreamAccent
+                )
+
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = {
@@ -206,7 +223,12 @@ fun ScanAndLettersScreen(
                     ) {
                         Icon(Icons.Outlined.PhotoCamera, contentDescription = null, modifier = Modifier.size(17.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("PHOTO", fontFamily = CyberMono, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = if (selectedDocUris.isEmpty()) "PHOTO" else "+ PAGE",
+                            fontFamily = CyberMono,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
 
                     OutlinedButton(
@@ -218,19 +240,49 @@ fun ScanAndLettersScreen(
                     ) {
                         Icon(Icons.Outlined.Description, contentDescription = null, modifier = Modifier.size(17.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("PDF / IMG", fontFamily = CyberMono, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("PDF / IMGS", fontFamily = CyberMono, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
 
-                if (selectedDocUri != null) {
+                if (selectedDocUris.isNotEmpty()) {
                     Surface(shape = TacticalPillShape, color = EmeraldBg, border = BorderStroke(1.dp, EmeraldText)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("DOCUMENT ATTACHED [✓]", fontFamily = CyberMono, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EmeraldText)
-                            Text("CLEAR", fontFamily = CyberMono, fontSize = 11.sp, color = RoseText, modifier = Modifier.clickable { selectedDocUri = null })
+                        Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val countLabel = if (selectedDocUris.size == 1) "1 FILE ATTACHED [✓]" else "${selectedDocUris.size} PAGES / FILES ATTACHED [✓]"
+                                Text(countLabel, fontFamily = CyberMono, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = EmeraldText)
+                                Text(
+                                    text = "CLEAR ALL",
+                                    fontFamily = CyberMono,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = RoseText,
+                                    modifier = Modifier.clickable { selectedDocUris = emptyList() }
+                                )
+                            }
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                selectedDocUris.forEachIndexed { idx, uri ->
+                                    Surface(
+                                        shape = TacticalPillShape,
+                                        color = MidnightBg,
+                                        border = BorderStroke(1.dp, EmeraldText.copy(alpha = 0.5f)),
+                                        modifier = Modifier.clickable {
+                                            selectedDocUris = selectedDocUris.filterNot { it == uri }
+                                        }
+                                    ) {
+                                        Text(
+                                            text = "PAGE ${idx + 1} ✕",
+                                            fontFamily = CyberMono,
+                                            fontSize = 10.sp,
+                                            color = TextPrimary,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -238,7 +290,7 @@ fun ScanAndLettersScreen(
                 OutlinedTextField(
                     value = pastedSmallPrint,
                     onValueChange = { pastedSmallPrint = it },
-                    label = { Text("Or paste contract / T&Cs / letter text", fontSize = 12.sp, color = TextSecondary) },
+                    label = { Text("Or paste contract / dismissal letter / T&Cs text", fontSize = 12.sp, color = TextSecondary) },
                     minLines = 3,
                     maxLines = 6,
                     shape = TacticalPillShape,
@@ -256,7 +308,7 @@ fun ScanAndLettersScreen(
                 OutlinedTextField(
                     value = contextNote,
                     onValueChange = { contextNote = it },
-                    label = { Text("Extra details (e.g. received 19 days late, faulty after 20 days)", fontSize = 12.sp, color = TextSecondary) },
+                    label = { Text("Context (e.g. started 2023, dismissed 10 Nov, no appeal)", fontSize = 12.sp, color = TextSecondary) },
                     singleLine = true,
                     shape = TacticalPillShape,
                     colors = OutlinedTextFieldDefaults.colors(
@@ -271,8 +323,8 @@ fun ScanAndLettersScreen(
                 )
 
                 Button(
-                    onClick = { onAnalyzeDocument(selectedDocUri, pastedSmallPrint.takeIf { it.isNotBlank() }, contextNote) },
-                    enabled = !isScanning && (selectedDocUri != null || pastedSmallPrint.isNotBlank()),
+                    onClick = { onAnalyzeDocument(selectedDocUris, pastedSmallPrint.takeIf { it.isNotBlank() }, contextNote) },
+                    enabled = !isScanning && (selectedDocUris.isNotEmpty() || pastedSmallPrint.isNotBlank()),
                     modifier = Modifier.fillMaxWidth().height(50.dp),
                     shape = TacticalPillShape,
                     colors = ButtonDefaults.buttonColors(

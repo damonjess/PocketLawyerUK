@@ -239,7 +239,7 @@ fun PocketLawyerRoot(
                         AppTab.SCAN -> ScanAndLettersScreen(
                             activeScan = state.activeScan,
                             isScanning = state.isScanningDocument,
-                            onAnalyzeDocument = { uri, text, note -> vm.analyzeDocument(context, uri, text, note) },
+                            onAnalyzeDocument = { uris, text, note -> vm.analyzeDocument(context, uris, text, note) },
                             onCitationClick = { citation, jur -> vm.lookupStatute(citation, jur) },
                             onClearActiveScan = { vm.clearActiveScan() }
                         )

@@ -203,16 +203,19 @@ class LegalAuditService(
 
     suspend fun analyzeDocumentOrText(
         context: Context,
-        documentUri: Uri?,
+        documentUris: List<Uri>,
         pastedText: String?,
         userContextNote: String = ""
     ): DocumentScanResult = withContext(Dispatchers.IO) {
         val parts = JSONArray()
 
-        if (documentUri != null) {
-            val mimeType = context.contentResolver.getType(documentUri) ?: "image/jpeg"
-            val tempFile = copyUriToTempFile(context, documentUri, "doc_scan")
+        documentUris.forEachIndexed { index, uri ->
+            val mimeType = context.contentResolver.getType(uri) ?: "image/jpeg"
+            val tempFile = copyUriToTempFile(context, uri, "doc_scan_$index")
             try {
+                if (documentUris.size > 1) {
+                    parts.put(JSONObject().put("text", "ATTACHMENT PAGE ${index + 1} OF ${documentUris.size}:"))
+                }
                 parts.put(buildMediaPartFromFile(tempFile, mimeType) {})
             } finally {
                 tempFile.delete()
@@ -220,15 +223,14 @@ class LegalAuditService(
         }
 
         if (!pastedText.isNullOrBlank()) {
-            parts.put(JSONObject().put("text", "DOCUMENT / SMALL PRINT TEXT:\n$pastedText"))
+            parts.put(JSONObject().put("text", "DOCUMENT / CONTRACT / SMALL PRINT TEXT:\n$pastedText"))
         }
 
         parts.put(JSONObject().put(
             "text",
-            "Analyze this UK document, fine, notice, or contract/T&Cs under current UK law (as of late 2026). " +
+            "Analyze ALL pages/text of this UK document, employment contract, dismissal letter, fine, notice, or T&Cs under current UK law (as of November 2026). " +
                 "Additional context from user: ${userContextNote.ifBlank { "None" }}. " +
-                "Check statutory deadlines (e.g., 14-day NIP rule, POFA 2012 Schedule 4, Consumer Rights Act 2015, Renters' Rights Act 2025). " +
-                "Identify red flags or unfair terms, and draft a formal, polite, statute-cited UK reply or appeal letter ready to send. Return ONLY valid JSON."
+                "Check statutory deadlines, missing mandatory terms, and unlawful or outdated clauses, then draft a formal, polite, statute-cited UK reply, grievance, or appeal letter ready to send. Return ONLY valid JSON."
         ))
 
         val bodyJson = JSONObject().apply {
@@ -239,7 +241,7 @@ class LegalAuditService(
             }))
             put("safetySettings", buildPermissiveSafetySettings())
             put("generationConfig", JSONObject().apply {
-                put("maxOutputTokens", 8192)
+                put("maxOutputTokens", 16384)
                 put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
             })
         }
@@ -746,8 +748,17 @@ class LegalAuditService(
         """.trimIndent()
 
         private val UK_DOC_SCANNER_PROMPT = """
-            You are Pocket Lawyer UK's Document, Fine & Small-Print Auditor (current UK law as of late 2026).
-            Check:
+            You are Pocket Lawyer UK's Document, Employment Contract, Fine & Small-Print Auditor (current UK law as of November 2026).
+            Check strictly against current UK legislation:
+            - Employment Contracts & Dismissal Letters (Employment Rights Act 1996, Employment Rights Act 2025, Working Time Regulations 1998, Equality Act 2010, ACAS Code of Practice):
+              * Written Particulars (ERA 1996 s.1): Day-1 mandatory terms (pay, hours, holiday, notice, sick pay, job title, place of work, disciplinary/grievance rules).
+              * Statutory Sick Pay (ERA 2025, in force 6 April 2026): SSP is payable from Day 1 (3-day waiting period abolished) and the Lower Earnings Limit is removed — flag any contract still imposing 3 unpaid waiting days for SSP as outdated/unlawful.
+              * Statutory Minimum Notice (ERA 1996 s.86): 1 week after 1 month–2 years; 1 week per complete year up to 12 weeks.
+              * Holiday & Hours (Working Time Regulations 1998): Minimum 5.6 weeks' paid holiday (28 days full-time); 48-hour weekly limit opt-out must be voluntary and cancellable; employers must keep holiday pay records for 6 years (from 6 April 2026).
+              * Unlawful Deductions (ERA 1996 s.13): Blanket deduction clauses or deductions that take pay below National Minimum Wage are restricted.
+              * Unfair Dismissal & Procedure: For dismissals taking effect on or before 31 December 2026, ordinary unfair dismissal still requires 2 years' qualifying service (unless automatically unfair — e.g. whistleblowing, statutory rights, pregnancy, industrial action — or discriminatory under Equality Act 2010). From 1 January 2027, the qualifying period drops to 6 months and the compensatory award cap is removed. Check ACAS Code of Practice steps (investigation, written allegations, right to be accompanied under Employment Relations Act 1999 s.10, right of appeal).
+              * Employment Tribunal Time Limits (ERA 2025, in force 1 October 2026): 6 months minus 1 day for most claims arising on or after 1 October 2026 (9 November 2026 for breach of contract in Scotland); 3 months minus 1 day if the act/dismissal occurred before those dates. Must notify ACAS Early Conciliation before the deadline expires.
+              * Restrictive Covenants / Non-Competes (Common Law restraint of trade): Flag overly broad duration, geography, or blanket post-termination bans. Note that statutory 'fire and rehire' bans take effect in March 2027 and NDA harassment/discrimination restrictions in September 2027 — do not claim those are already in force in November 2026.
             - Speeding NIPs: Road Traffic Offenders Act 1988 s.1 (14-day rule for registered keeper) & RTA s.172 (28 days to name driver).
             - Private Parking (PCNs): Protection of Freedoms Act 2012 Schedule 4 (14-day ANPR notice rule, signage, grace periods).
             - Renting (England): Renters' Rights Act 2025 (in force from 1 May 2026 — Section 21 no-fault evictions abolished, fixed terms abolished, valid Section 8 grounds required).
@@ -755,19 +766,19 @@ class LegalAuditService(
             Return ONLY valid JSON:
             {
               "title": "Short title for this document",
-              "documentType": "Speeding NIP | Parking PCN | Tenancy Notice | Employment | Consumer | Small Print T&Cs",
+              "documentType": "Employment Contract | Dismissal Letter | Speeding NIP | Parking PCN | Tenancy Notice | Consumer | Small Print T&Cs",
               "jurisdiction": "ENGLAND_WALES | SCOTLAND | NORTHERN_IRELAND",
-              "summary": "Plain-English 3-sentence summary of what this document means and whether it looks enforceable.",
-              "keyDeadlines": ["Specific deadline with date/days if present"],
+              "summary": "Plain-English 3-sentence summary of what this document means and whether it complies with UK law.",
+              "keyDeadlines": ["Specific deadline with date/days if present (e.g. ACAS Early Conciliation / 6-month tribunal window, internal appeal deadline)"],
               "redFlags": [
                 {
                   "severity": "HIGH | MEDIUM | INFO",
                   "clause": "Short quote or section name",
-                  "issue": "Why this is unlawful, unfair, missing, or important",
+                  "issue": "Why this is unlawful, outdated, unfair, missing, or important",
                   "citation": "Exact UK Act and Section"
                 }
               ],
-              "appealOrReplyLetter": "Complete, formal UK letter or email draft with [Your Name] / [Reference] placeholders ready to copy or export as PDF."
+              "appealOrReplyLetter": "Complete, formal UK letter or email draft (e.g. dismissal appeal, contract query, or grievance) with [Your Name] / [Reference] placeholders ready to copy or export as PDF."
             }
         """.trimIndent()
 
