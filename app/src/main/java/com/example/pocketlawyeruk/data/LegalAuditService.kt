@@ -63,7 +63,13 @@ class LegalAuditService(
         confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
         onStatus: (String) -> Unit = {}
     ): AuditReport = withContext(Dispatchers.IO) {
-        val mediaPart = buildMediaPartFromFile(audioFile, "audio/mp3", onStatus)
+        val mimeType = when (audioFile.extension.lowercase()) {
+            "m4a" -> "audio/mp4"
+            "mp4" -> "video/mp4"
+            "webm" -> "video/webm"
+            else -> "audio/mp3"
+        }
+        val mediaPart = buildMediaPartFromFile(audioFile, mimeType, onStatus)
         runAuditWithMediaPart(mediaPart, sourceUrl, null, encounterType, confrontingParty, onStatus)
     }
 

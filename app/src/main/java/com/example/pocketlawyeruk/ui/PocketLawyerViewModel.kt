@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
 import com.example.pocketlawyeruk.data.LegalAuditService
 import com.example.pocketlawyeruk.data.VideoAudioExtractor
 import com.example.pocketlawyeruk.data.local.PocketLawyerDatabase
@@ -27,6 +28,9 @@ data class PocketLawyerUiState(
     val scans: List<DocumentScanResult> = emptyList(),
     val bookmarks: List<SavedBookmark> = emptyList(),
     val chatMessages: List<ChatMessage> = emptyList(),
+    val cases: List<CaseRecord> = emptyList(),
+    val caseItems: List<CaseItem> = emptyList(),
+    val activeCaseId: String? = null,
     val activeReport: AuditReport? = null,
     val activeScan: DocumentScanResult? = null,
     val vaultSearchQuery: String = "",
@@ -97,6 +101,16 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
                 _uiState.update { it.copy(bookmarks = entities.map { e -> e.toModel() }) }
             }
         }
+        viewModelScope.launch {
+            db.caseDao().observeAll().collect { entities ->
+                _uiState.update { it.copy(cases = entities.map { e -> e.toModel() }) }
+            }
+        }
+        viewModelScope.launch {
+            db.caseDao().observeAllItems().collect { entities ->
+                _uiState.update { it.copy(caseItems = entities.map { e -> e.toModel() }) }
+            }
+        }
     }
 
     fun openAudit(auditId: String) {
@@ -115,9 +129,87 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
     fun openSavedScan(scan: DocumentScanResult) = _uiState.update { it.copy(activeScan = scan) }
     fun clearActiveScan() = _uiState.update { it.copy(activeScan = null) }
 
-    fun deleteAudit(id: String) = viewModelScope.launch { db.auditDao().deleteById(id) }
-    fun deleteScan(id: String) = viewModelScope.launch { db.documentScanDao().deleteById(id) }
-    fun deleteBookmark(id: String) = viewModelScope.launch { db.bookmarkDao().deleteById(id) }
+    fun createCase(title: String, onCreated: (String) -> Unit = {}) {
+        val clean = title.trim()
+        if (clean.isBlank()) return
+        val now = System.currentTimeMillis()
+        val record = CaseRecord(title = clean, createdAt = now, updatedAt = now)
+        viewModelScope.launch {
+            db.caseDao().upsertCase(record.toEntity())
+            _uiState.update {
+                it.copy(
+                    // Avoid a frame where activeCaseId exists but the Room flow has not emitted yet.
+                    cases = (listOf(record) + it.cases).distinctBy { case -> case.id },
+                    activeCaseId = record.id
+                )
+            }
+            onCreated(record.id)
+        }
+    }
+
+    fun openCase(id: String) = _uiState.update { it.copy(activeCaseId = id) }
+    fun closeCase() = _uiState.update { it.copy(activeCaseId = null) }
+
+    fun renameCase(id: String, title: String) {
+        val clean = title.trim()
+        if (clean.isBlank()) return
+        viewModelScope.launch {
+            db.caseDao().rename(id, clean, System.currentTimeMillis())
+        }
+    }
+
+    fun deleteCase(id: String) {
+        viewModelScope.launch {
+            db.withTransaction {
+                db.caseDao().deleteLinksForCase(id)
+                db.caseDao().deleteCase(id)
+            }
+            _uiState.update { it.copy(activeCaseId = it.activeCaseId?.takeUnless { active -> active == id }) }
+        }
+    }
+
+    fun addItemsToCase(caseId: String, items: List<CaseItem>) {
+        if (items.isEmpty()) return
+        val now = System.currentTimeMillis()
+        viewModelScope.launch {
+            db.withTransaction {
+                items.forEach { item ->
+                    db.caseDao().linkItem(item.copy(caseId = caseId, addedAt = now).toEntity())
+                }
+                db.caseDao().touch(caseId, now)
+            }
+        }
+    }
+
+    fun removeItemFromCase(caseId: String, type: CaseItemType, itemId: String) {
+        viewModelScope.launch {
+            db.withTransaction {
+                db.caseDao().unlinkItem(caseId, type.name, itemId)
+                db.caseDao().touch(caseId, System.currentTimeMillis())
+            }
+        }
+    }
+
+    fun deleteAudit(id: String) = viewModelScope.launch {
+        db.withTransaction {
+            db.auditDao().deleteById(id)
+            db.caseDao().deleteLinksForItem(CaseItemType.AUDIT.name, id)
+        }
+    }
+
+    fun deleteScan(id: String) = viewModelScope.launch {
+        db.withTransaction {
+            db.documentScanDao().deleteById(id)
+            db.caseDao().deleteLinksForItem(CaseItemType.SCAN.name, id)
+        }
+    }
+
+    fun deleteBookmark(id: String) = viewModelScope.launch {
+        db.withTransaction {
+            db.bookmarkDao().deleteById(id)
+            db.caseDao().deleteLinksForItem(CaseItemType.BOOKMARK.name, id)
+        }
+    }
 
     private fun requireApiKey(): Boolean {
         if (_uiState.value.apiKey.isBlank()) {

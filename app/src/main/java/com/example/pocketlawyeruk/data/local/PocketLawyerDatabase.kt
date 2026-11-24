@@ -2,6 +2,8 @@ package com.example.pocketlawyeruk.data.local
 
 import android.content.Context
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.example.pocketlawyeruk.model.*
 import com.example.pocketlawyeruk.ui.screens.EncounterType
 import kotlinx.coroutines.flow.Flow
@@ -50,6 +52,34 @@ data class BookmarkEntity(
     val content: String,
     val citation: String,
     val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "cases")
+data class CaseEntity(
+    @PrimaryKey val id: String,
+    val title: String,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
+@Entity(
+    tableName = "case_items",
+    primaryKeys = ["caseId", "itemType", "itemId"],
+    foreignKeys = [
+        ForeignKey(
+            entity = CaseEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["caseId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("caseId"), Index("itemId")]
+)
+data class CaseItemEntity(
+    val caseId: String,
+    val itemType: String,
+    val itemId: String,
+    val addedAt: Long
 )
 
 // ---------------- DAOs ----------------
@@ -111,11 +141,51 @@ interface BookmarkDao {
     suspend fun deleteById(id: String)
 }
 
+@Dao
+interface CaseDao {
+    @Query("SELECT * FROM cases ORDER BY updatedAt DESC")
+    fun observeAll(): Flow<List<CaseEntity>>
+
+    @Query("SELECT * FROM case_items")
+    fun observeAllItems(): Flow<List<CaseItemEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCase(entity: CaseEntity)
+
+    @Query("UPDATE cases SET title = :title, updatedAt = :now WHERE id = :id")
+    suspend fun rename(id: String, title: String, now: Long)
+
+    @Query("UPDATE cases SET updatedAt = :now WHERE id = :id")
+    suspend fun touch(id: String, now: Long)
+
+    @Query("DELETE FROM cases WHERE id = :id")
+    suspend fun deleteCase(id: String)
+
+    @Query("DELETE FROM case_items WHERE caseId = :caseId")
+    suspend fun deleteLinksForCase(caseId: String)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun linkItem(entity: CaseItemEntity)
+
+    @Query("DELETE FROM case_items WHERE caseId = :caseId AND itemType = :itemType AND itemId = :itemId")
+    suspend fun unlinkItem(caseId: String, itemType: String, itemId: String)
+
+    @Query("DELETE FROM case_items WHERE itemType = :itemType AND itemId = :itemId")
+    suspend fun deleteLinksForItem(itemType: String, itemId: String)
+}
+
 // ---------------- DATABASE ----------------
 
 @Database(
-    entities = [AuditEntity::class, DocumentScanEntity::class, ChatMessageEntity::class, BookmarkEntity::class],
-    version = 1,
+    entities = [
+        AuditEntity::class,
+        DocumentScanEntity::class,
+        ChatMessageEntity::class,
+        BookmarkEntity::class,
+        CaseEntity::class,
+        CaseItemEntity::class
+    ],
+    version = 2,
     exportSchema = false
 )
 abstract class PocketLawyerDatabase : RoomDatabase() {
@@ -123,9 +193,34 @@ abstract class PocketLawyerDatabase : RoomDatabase() {
     abstract fun documentScanDao(): DocumentScanDao
     abstract fun chatDao(): ChatDao
     abstract fun bookmarkDao(): BookmarkDao
+    abstract fun caseDao(): CaseDao
 
     companion object {
         @Volatile private var INSTANCE: PocketLawyerDatabase? = null
+
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `cases` (" +
+                        "`id` TEXT NOT NULL, " +
+                        "`title` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`id`))"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `case_items` (" +
+                        "`caseId` TEXT NOT NULL, " +
+                        "`itemType` TEXT NOT NULL, " +
+                        "`itemId` TEXT NOT NULL, " +
+                        "`addedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`caseId`, `itemType`, `itemId`), " +
+                        "FOREIGN KEY(`caseId`) REFERENCES `cases`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_case_items_caseId` ON `case_items` (`caseId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_case_items_itemId` ON `case_items` (`itemId`)")
+            }
+        }
 
         fun getInstance(context: Context): PocketLawyerDatabase =
             INSTANCE ?: synchronized(this) {
@@ -133,7 +228,7 @@ abstract class PocketLawyerDatabase : RoomDatabase() {
                     context.applicationContext,
                     PocketLawyerDatabase::class.java,
                     "pocket_lawyer_uk.db"
-                ).build().also { INSTANCE = it }
+                ).addMigrations(MIGRATION_1_2).build().also { INSTANCE = it }
             }
     }
 }
@@ -372,5 +467,33 @@ object VaultMappers {
         content = content,
         citation = citation,
         createdAt = createdAt
+    )
+
+    fun CaseEntity.toModel() = CaseRecord(
+        id = id,
+        title = title,
+        createdAt = createdAt,
+        updatedAt = updatedAt
+    )
+
+    fun CaseRecord.toEntity() = CaseEntity(
+        id = id,
+        title = title,
+        createdAt = createdAt,
+        updatedAt = updatedAt
+    )
+
+    fun CaseItemEntity.toModel() = CaseItem(
+        caseId = caseId,
+        type = runCatching { CaseItemType.valueOf(itemType) }.getOrDefault(CaseItemType.AUDIT),
+        itemId = itemId,
+        addedAt = addedAt
+    )
+
+    fun CaseItem.toEntity() = CaseItemEntity(
+        caseId = caseId,
+        itemType = type.name,
+        itemId = itemId,
+        addedAt = addedAt
     )
 }

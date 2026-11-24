@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -133,7 +134,7 @@ fun PocketLawyerRoot(
 ) {
     val state by vm.uiState.collectAsState()
     val context = LocalContext.current
-    var currentTab by remember { mutableStateOf(AppTab.AUDIT) }
+    var currentTab by rememberSaveable { mutableStateOf(AppTab.AUDIT) }
     var showLiveCopilot by remember { mutableStateOf(false) }
 
     // Open audit automatically when user taps a background completion notification
@@ -282,6 +283,9 @@ fun PocketLawyerRoot(
                             audits = state.audits,
                             scans = state.scans,
                             bookmarks = state.bookmarks,
+                            cases = state.cases,
+                            caseItems = state.caseItems,
+                            activeCaseId = state.activeCaseId,
                             onSearchChange = { vm.updateVaultSearch(it) },
                             onOpenAudit = { vm.openAudit(it) },
                             onDeleteAudit = { vm.deleteAudit(it) },
@@ -290,7 +294,14 @@ fun PocketLawyerRoot(
                                 currentTab = AppTab.SCAN
                             },
                             onDeleteScan = { vm.deleteScan(it) },
-                            onDeleteBookmark = { vm.deleteBookmark(it) }
+                            onDeleteBookmark = { vm.deleteBookmark(it) },
+                            onOpenCase = { vm.openCase(it) },
+                            onCloseCase = { vm.closeCase() },
+                            onCreateCase = { vm.createCase(it) },
+                            onRenameCase = { id, title -> vm.renameCase(id, title) },
+                            onDeleteCase = { vm.deleteCase(it) },
+                            onAddItemsToCase = { id, items -> vm.addItemsToCase(id, items) },
+                            onRemoveItemFromCase = { id, type, itemId -> vm.removeItemFromCase(id, type, itemId) }
                         )
                     }
                 }

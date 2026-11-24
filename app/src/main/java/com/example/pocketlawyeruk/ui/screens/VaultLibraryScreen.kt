@@ -20,11 +20,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.pocketlawyeruk.model.AuditReport
 import com.example.pocketlawyeruk.model.BookmarkFolder
+import com.example.pocketlawyeruk.model.CaseItem
+import com.example.pocketlawyeruk.model.CaseItemType
+import com.example.pocketlawyeruk.model.CaseRecord
 import com.example.pocketlawyeruk.model.DocumentScanResult
 import com.example.pocketlawyeruk.model.SavedBookmark
 import com.example.pocketlawyeruk.ui.theme.*
 
 private enum class VaultTab(val label: String) {
+    CASES("CASES"),
     AUDITS("AUDITS"),
     SCANS("DOCS"),
     BOOKMARKS("MYTHBUSTER")
@@ -36,14 +40,47 @@ fun VaultLibraryScreen(
     audits: List<AuditReport>,
     scans: List<DocumentScanResult>,
     bookmarks: List<SavedBookmark>,
+    cases: List<CaseRecord>,
+    caseItems: List<CaseItem>,
+    activeCaseId: String?,
     onSearchChange: (String) -> Unit,
     onOpenAudit: (String) -> Unit,
     onDeleteAudit: (String) -> Unit,
     onOpenScan: (DocumentScanResult) -> Unit,
     onDeleteScan: (String) -> Unit,
-    onDeleteBookmark: (String) -> Unit
+    onDeleteBookmark: (String) -> Unit,
+    onOpenCase: (String) -> Unit,
+    onCloseCase: () -> Unit,
+    onCreateCase: (String) -> Unit,
+    onRenameCase: (String, String) -> Unit,
+    onDeleteCase: (String) -> Unit,
+    onAddItemsToCase: (String, List<CaseItem>) -> Unit,
+    onRemoveItemFromCase: (String, CaseItemType, String) -> Unit
 ) {
-    var activeTab by remember { mutableStateOf(VaultTab.AUDITS) }
+    val activeCase = remember(cases, activeCaseId) { cases.find { it.id == activeCaseId } }
+
+    if (activeCaseId != null) {
+        if (activeCase != null) {
+            CaseDetailContent(
+                case = activeCase,
+                caseItems = caseItems,
+                audits = audits,
+                scans = scans,
+                bookmarks = bookmarks,
+                onBack = onCloseCase,
+                onRename = { onRenameCase(activeCase.id, it) },
+                onDelete = { onDeleteCase(activeCase.id) },
+                onAddItems = { onAddItemsToCase(activeCase.id, it) },
+                onRemoveItem = { type, itemId -> onRemoveItemFromCase(activeCase.id, type, itemId) },
+                onOpenAudit = onOpenAudit,
+                onOpenScan = onOpenScan
+            )
+            return
+        }
+        LaunchedEffect(activeCaseId) { onCloseCase() }
+    }
+
+    var activeTab by remember { mutableStateOf(VaultTab.CASES) }
     var selectedFolder by remember { mutableStateOf<BookmarkFolder?>(null) }
 
     val filteredBookmarks = remember(bookmarks, selectedFolder, searchQuery) {
@@ -138,6 +175,16 @@ fun VaultLibraryScreen(
         }
 
         when (activeTab) {
+            VaultTab.CASES -> {
+                CasesListContent(
+                    cases = cases,
+                    caseItems = caseItems,
+                    searchQuery = searchQuery,
+                    onOpenCase = onOpenCase,
+                    onCreateCase = onCreateCase
+                )
+            }
+
             VaultTab.AUDITS -> {
                 if (filteredAudits.isEmpty()) {
                     Text("No matching video audits in your offline vault.", fontFamily = CyberMono, fontSize = 12.sp, color = TextSecondary)

@@ -423,7 +423,11 @@ fun HomeScreen(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun CyberAuditDossierCard(report: AuditReport, onClick: () -> Unit) {
+fun CyberAuditDossierCard(
+    report: AuditReport,
+    onClick: () -> Unit,
+    showLiveBadge: Boolean = false
+) {
     val (badgeBg, badgeFg) = when {
         report.complianceScore >= 80 -> EmeraldBg to EmeraldText
         report.complianceScore >= 50 -> AmberBg to AmberText
@@ -496,6 +500,18 @@ fun CyberAuditDossierCard(report: AuditReport, onClick: () -> Unit) {
                             softWrap = false,
                             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                         )
+                    }
+                    if (showLiveBadge) {
+                        Surface(shape = TacticalPillShape, color = EmeraldBg, border = BorderStroke(1.dp, EmeraldText.copy(alpha = 0.6f))) {
+                            Text(
+                                text = "LIVE TRANSCRIPT",
+                                fontFamily = CyberMono,
+                                fontSize = 9.sp,
+                                color = EmeraldText,
+                                softWrap = false,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                     if (report.isExample) {
                         Surface(shape = TacticalPillShape, color = MidnightBg, border = BorderStroke(1.dp, CardBorder)) {
