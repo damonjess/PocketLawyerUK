@@ -32,12 +32,11 @@ class LegalAuditService(
 ) {
     constructor(context: Context) : this({ getStoredApiKey(context) })
 
-    // 60s read / 70s total cap so a hung model fails over in ~1 min instead of stalling 4 mins
     private val auditClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .writeTimeout(45, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .callTimeout(70, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .callTimeout(100, TimeUnit.SECONDS)
         .build()
 
     // Longer timeout strictly for >18 MB Gemini Files API uploads
@@ -493,6 +492,26 @@ class LegalAuditService(
 
     // ---------------- INTERNAL HELPERS & PARSERS ----------------
 
+    private fun adaptBodyForModel(original: JSONObject, model: String): JSONObject {
+        val copy = JSONObject(original.toString())
+
+        // Gemma 4 requires "role": "system" on system_instruction (avoids HTTP 500)
+        copy.optJSONObject("system_instruction")?.let { sys ->
+            if (!sys.has("role")) sys.put("role", "system")
+        }
+
+        // Gemma 4 only accepts thinkingLevel "minimal" or "high" (rejects "low" / "medium" with HTTP 400)
+        if (model.startsWith("gemma-4", ignoreCase = true)) {
+            copy.optJSONObject("generationConfig")
+                ?.optJSONObject("thinkingConfig")
+                ?.let { tc ->
+                    val lvl = tc.optString("thinkingLevel", "minimal").lowercase()
+                    tc.put("thinkingLevel", if (lvl == "high" || lvl == "medium") "high" else "minimal")
+                }
+        }
+        return copy
+    }
+
     private suspend fun executeGeminiRaw(
         bodyJson: JSONObject,
         models: List<String> = AUDIT_MODELS,
@@ -503,71 +522,87 @@ class LegalAuditService(
         if (cleanKey.isEmpty()) throw IllegalStateException(MISSING_KEY_MESSAGE)
         val errors = mutableListOf<String>()
 
-        for ((index, model) in models.withIndex()) {
-            currentCoroutineContext().ensureActive()
-            onStatus(
-                if (index == 0) "Analysing with $model..."
-                else "Failover ${index + 1}/${models.size}: $model..."
-            )
-
-            val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
-            val req = Request.Builder()
-                .url(url)
-                .header("x-goog-api-key", cleanKey)
-                .post(bodyJson.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
-                .build()
-
-            val call = httpClient.newCall(req)
-            val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
-                if (cause != null) call.cancel()
+        // Pass 1 tries all models; Pass 2 retries only models that returned 503 after a brief cooldown
+        var queue = models
+        for (pass in 1..2) {
+            val busyModels = mutableListOf<String>()
+            if (pass == 2) {
+                onStatus("Gemini servers busy (503) — retrying in 4s...")
+                delay(4000)
             }
 
-            try {
-                call.execute().use { resp ->
-                    val body = resp.body?.string().orEmpty()
-                    if (resp.isSuccessful) {
-                        val root = JSONObject(body)
-                        val candidate = root.optJSONArray("candidates")?.optJSONObject(0)
-                        val extracted = if (candidate != null) extractAllTextParts(candidate) else ""
+            for ((index, model) in queue.withIndex()) {
+                currentCoroutineContext().ensureActive()
+                onStatus(
+                    when {
+                        pass == 2 -> "Retry (high demand): $model..."
+                        index == 0 -> "Analysing with $model..."
+                        else -> "Failover ${index + 1}/${queue.size}: $model..."
+                    }
+                )
 
-                        if (extracted.isNotBlank()) {
-                            return root
+                val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent"
+                val payload = adaptBodyForModel(bodyJson, model)
+                val req = Request.Builder()
+                    .url(url)
+                    .header("x-goog-api-key", cleanKey)
+                    .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                    .build()
+
+                val call = httpClient.newCall(req)
+                val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion { cause ->
+                    if (cause != null) call.cancel()
+                }
+
+                try {
+                    call.execute().use { resp ->
+                        val body = resp.body?.string().orEmpty()
+                        if (resp.isSuccessful) {
+                            val root = JSONObject(body)
+                            val candidate = root.optJSONArray("candidates")?.optJSONObject(0)
+                            val extracted = if (candidate != null) extractAllTextParts(candidate) else ""
+
+                            if (extracted.isNotBlank()) return root
+
+                            val finishReason = candidate?.optString("finishReason")
+                                ?: root.optJSONObject("promptFeedback")?.optString("blockReason")
+                                ?: "EMPTY_CANDIDATE"
+                            errors.add("$model: empty ($finishReason)")
+                            return@use
                         }
 
-                        val finishReason = candidate?.optString("finishReason")
-                            ?: root.optJSONObject("promptFeedback")?.optString("blockReason")
-                            ?: "EMPTY_CANDIDATE"
-                        errors.add("$model: empty ($finishReason)")
-                        return@use
-                    }
+                        if (resp.code == 401 || (resp.code in listOf(400, 403) && isInvalidApiKeyResponse(body))) {
+                            throw IllegalStateException(INVALID_KEY_MESSAGE)
+                        }
+                        if (resp.code == 402) throw IllegalStateException(
+                            "Billing is not active for this project (402): prepayment credits are depleted. Add credits at aistudio.google.com/billing, or unlink the billing account in Google Cloud Console to use the free tier."
+                        )
 
-                    if (resp.code == 401 || (resp.code in listOf(400, 403) && isInvalidApiKeyResponse(body))) {
-                        throw IllegalStateException(INVALID_KEY_MESSAGE)
-                    }
-                    if (resp.code == 402) throw IllegalStateException(
-                        "Billing is not active for this project (402): prepayment credits are depleted. Add credits at aistudio.google.com/billing, or unlink the billing account in Google Cloud Console to use the free tier."
-                    )
+                        if (resp.code in listOf(400, 404, 429, 500, 503)) {
+                            if (resp.code == 503) busyModels.add(model)
+                            val shortMsg = runCatching {
+                                JSONObject(body).getJSONObject("error").optString("message").take(60)
+                            }.getOrDefault("")
+                            errors.add("$model: HTTP ${resp.code}${if (shortMsg.isNotBlank()) " ($shortMsg)" else ""}")
+                            return@use
+                        }
 
-                    if (resp.code in listOf(400, 404, 429, 500, 503)) {
-                        val shortMsg = runCatching {
-                            JSONObject(body).getJSONObject("error").optString("message").take(60)
-                        }.getOrDefault("")
-                        errors.add("$model: HTTP ${resp.code}${if (shortMsg.isNotBlank()) " ($shortMsg)" else ""}")
-                        return@use
+                        throw IllegalStateException("Gemini API error (${resp.code}) on $model: ${apiErrorMessage(body)}")
                     }
-
-                    throw IllegalStateException("Gemini API error (${resp.code}) on $model: ${apiErrorMessage(body)}")
+                } catch (e: IOException) {
+                    currentCoroutineContext().ensureActive()
+                    errors.add("$model: timeout/network (${e.localizedMessage ?: e.message ?: "unknown"})")
+                } finally {
+                    cancelHandle?.dispose()
                 }
-            } catch (e: IOException) {
-                currentCoroutineContext().ensureActive()
-                errors.add("$model: timeout/network (${e.localizedMessage ?: e.message ?: "unknown"})")
-            } finally {
-                cancelHandle?.dispose()
             }
+
+            if (busyModels.isEmpty()) break
+            queue = busyModels
         }
 
         throw IllegalStateException(
-            "All models failed:\n" + errors.joinToString("\n")
+            "All models failed:\n" + errors.distinct().joinToString("\n")
         )
     }
 
@@ -805,18 +840,24 @@ class LegalAuditService(
 
     companion object {
         
-        // Fast 500/day Flash-Lite first for quick audio transcription & fact-checking; full Flash as backup
+        // Audio/video/PDF-capable free models (all 6 pools)
         private val AUDIT_MODELS = listOf(
             "gemini-3.5-flash-lite",
             "gemini-3.1-flash-lite",
+            "gemini-4-hydrogen",
             "gemini-3.8-flash",
+            "gemini-3.6-flash",
             "gemini-3-flash-preview"
         )
         
-        // Your two 500/day Flash-Lite pools first for fast Law AI chat & statute taps
+        // Text-only endpoints (Law AI, Statute Intel, Live Co-Pilot, Case Q&A)
+        // Backed by Gemma 4's 14,400/day free pools when Gemini Flash is spiked
         private val CHAT_MODELS = listOf(
             "gemini-3.5-flash-lite",
             "gemini-3.1-flash-lite",
+            "gemma-4-31b-it",
+            "gemma-4-26b-a4b-it",
+            "gemini-4-hydrogen",
             "gemini-3.8-flash",
             "gemini-3-flash-preview"
         )
