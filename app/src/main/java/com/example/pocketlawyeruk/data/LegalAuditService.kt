@@ -195,7 +195,7 @@ class LegalAuditService(
             put("safetySettings", buildPermissiveSafetySettings())
             put("generationConfig", JSONObject().apply {
                 put("maxOutputTokens", 16384)
-                put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
+                put("thinkingConfig", JSONObject().put("thinkingLevel", "medium"))
             })
         }
 
@@ -265,7 +265,7 @@ class LegalAuditService(
             put("safetySettings", buildPermissiveSafetySettings())
             put("generationConfig", JSONObject().apply {
                 put("maxOutputTokens", 16384)
-                put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
+                put("thinkingConfig", JSONObject().put("thinkingLevel", "medium"))
             })
         }
 
@@ -858,6 +858,11 @@ class LegalAuditService(
             Grade ALL sides objectively: flag unlawful orders/threats by police or staff AND flag legal myths repeated by filmers/auditors.
             If no police stop & search occurred, mark all GOWISELY steps as "SKIPPED" and base "complianceScore" (0-100) on the overall legal conduct of the confronting party (police or staff/security).
             Provide a concise 1-sentence "scoreSummary" explaining why the score is that number.
+
+            SPEAKER DIARISATION & COMPLETENESS RULES (CRITICAL):
+            - Always separate speakers accurately: the person recording, defending their right to film/fly a drone, or referencing their channel/audits is ALWAYS speaker="Filmer", side="PUBLIC". People challenging them, asking them to leave, citing site rules, or threatening police/citizen's arrest are "Staff"/"Security" (STAFF_SECURITY) or "Officer" (OFFICER). Never merge two different speakers into one transcript turn.
+            - Every single false claim, unlawful demand, threat (including unlawful citizen's arrest under PACE 1984 s.24A, threats to call police over lawful filming, or GDPR/number-plate myths), or significant lawful statement mentioned in "scoreSummary" or "takeaway" MUST have its own entry in "timeline".
+            - Do NOT return a 1-item timeline or 0 violations if "complianceScore" is below 100 — extract ALL legally notable statements (typically 3 to 8 cards) in chronological order.
 
             Return ONLY valid JSON:
             {

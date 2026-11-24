@@ -27,22 +27,22 @@ enum class ConfrontingParty(val label: String, val hint: String, val promptDirec
     AUTO(
         label = "Auto",
         hint = "AI detects police vs. private staff from audio cues",
-        promptDirective = "Auto-detect whether the confronting party is UK Police (OFFICER), Private Staff/Security (STAFF_SECURITY), or both."
+        promptDirective = "Identify who is holding the camera/filming/flying a drone (ALWAYS speaker=\"Filmer\", side=\"PUBLIC\") separately from the confronting party (UK Police side=\"OFFICER\" or Private Staff/Security side=\"STAFF_SECURITY\")."
     ),
     POLICE(
         label = "Police",
         hint = "Locked to UK Police powers (PACE, s.50, RTA, NPCC)",
-        promptDirective = "CONFIRMED BY USER: The people confronting the filmer in this video are UK POLICE OFFICERS (or PCSOs) — NOT private staff or security. Classify ALL confronting speakers as side=\"OFFICER\" (speaker=\"Officer\") and evaluate strictly under UK police powers (PACE 1984, Police Reform Act 2002 s.50, Road Traffic Act 1988, Terrorism Act s.43, NPCC Filming Guidance). NEVER label them as STAFF_SECURITY or private staff."
+        promptDirective = "CONFIRMED BY USER: The confronting party is UK POLICE (side=\"OFFICER\", speaker=\"Officer\"), while the person filming/auditing/flying the drone is ALWAYS side=\"PUBLIC\" (speaker=\"Filmer\"). Keep their voices strictly separated — never label the filmer's quotes as Officer, and never label police as Staff."
     ),
     STAFF(
         label = "Staff",
         hint = "Locked to Private Staff / Security (Trespass & Civil Law)",
-        promptDirective = "CONFIRMED BY USER: The people confronting the filmer in this video are PRIVATE STAFF OR SECURITY GUARDS — NOT police officers. Classify ALL confronting speakers as side=\"STAFF_SECURITY\" (speaker=\"Staff\" or \"Security\"), mark all GOWISELY steps as \"SKIPPED\", and evaluate under private land/trespass rules and general UK criminal/civil law. NEVER label them as OFFICER or police."
+        promptDirective = "CONFIRMED BY USER: The confronting party is PRIVATE STAFF / SECURITY (side=\"STAFF_SECURITY\", speaker=\"Staff\" or \"Security\"), while the person holding the camera, filming, flying a drone, defending public photography rights, or mentioning their channel is ALWAYS side=\"PUBLIC\" (speaker=\"Filmer\"). Keep the Filmer and Staff voices strictly separated — never label the filmer's lines as Staff or Security. Mark all GOWISELY steps as \"SKIPPED\"."
     ),
     BOTH(
         label = "Both",
         hint = "Both UK Police and Private Staff/Security are present",
-        promptDirective = "CONFIRMED BY USER: BOTH UK Police officers AND private site staff/security appear in this video. Carefully distinguish officers (side=\"OFFICER\") from private staff/security (side=\"STAFF_SECURITY\")."
+        promptDirective = "CONFIRMED BY USER: The person filming/auditing is ALWAYS side=\"PUBLIC\" (speaker=\"Filmer\"), while BOTH UK Police (side=\"OFFICER\") and Private Staff/Security (side=\"STAFF_SECURITY\") confront them. Keep all three roles strictly separated."
     )
 }
 

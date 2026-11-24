@@ -413,7 +413,7 @@ fun AuditReportScreen(
                         OutlinedTextField(
                             value = questionText,
                             onValueChange = { questionText = it },
-                            placeholder = { Text("Ask a follow-up about this clip...", fontSize = 13.sp, color = TextSecondary) },
+                            placeholder = { Text("Ask a follow-up about this clip...", fontSize = 13.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             singleLine = true,
                             shape = TacticalPillShape,
                             colors = OutlinedTextFieldDefaults.colors(
