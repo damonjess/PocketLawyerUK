@@ -43,8 +43,8 @@ fun HomeScreen(
     shareNonce: Int = 0,
     audits: List<AuditReport>,
     onAuditClick: (String) -> Unit,
-    onRunAudit: (url: String, videoUri: Uri?, type: EncounterType, party: ConfrontingParty) -> Unit,
-    onQueueBackgroundAudit: (url: String, type: EncounterType, party: ConfrontingParty) -> Unit,
+    onRunAudit: (url: String, videoUri: Uri?, type: EncounterType, party: ConfrontingParty, depth: AuditDepth) -> Unit,
+    onQueueBackgroundAudit: (url: String, type: EncounterType, party: ConfrontingParty, depth: AuditDepth) -> Unit,
     onOpenLiveCopilot: () -> Unit = {}
 ) {
     val clipboardManager = LocalClipboardManager.current
@@ -52,6 +52,7 @@ fun HomeScreen(
     var selectedVideoUri by remember(sharedVideoUri, shareNonce) { mutableStateOf(sharedVideoUri) }
     var selectedType by remember { mutableStateOf(EncounterType.PEDESTRIAN) }
     var selectedParty by remember { mutableStateOf(ConfrontingParty.AUTO) }
+    var selectedDepth by remember { mutableStateOf(AuditDepth.FAST) }
 
     val videoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -341,13 +342,14 @@ fun HomeScreen(
                     )
                 }
 
-                // Dual Action Row: Run Now + Queue in Background
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 3-button row: RUN AUDIT + FAST/DEEP toggle + BG
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Button(
-                        onClick = { onRunAudit(linkText, selectedVideoUri, selectedType, selectedParty) },
+                        onClick = { onRunAudit(linkText, selectedVideoUri, selectedType, selectedParty, selectedDepth) },
                         enabled = canRunAudit,
                         modifier = Modifier.weight(1f).height(50.dp),
                         shape = TacticalPillShape,
+                        contentPadding = PaddingValues(horizontal = 10.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = CreamAccent,
                             contentColor = CreamTextDark,
@@ -355,25 +357,60 @@ fun HomeScreen(
                             disabledContentColor = TextSecondary
                         )
                     ) {
-                        Icon(Icons.Outlined.Radar, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("RUN AUDIT", fontFamily = CyberMono, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Icon(Icons.Outlined.TrackChanges, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("RUN AUDIT", fontFamily = CyberMono, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1)
                     }
 
-                    if (linkText.isNotBlank() && selectedVideoUri == null) {
-                        OutlinedButton(
-                            onClick = { onQueueBackgroundAudit(linkText, selectedType, selectedParty) },
-                            modifier = Modifier.height(50.dp),
-                            shape = TacticalPillShape,
-                            border = BorderStroke(1.dp, EmeraldText),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = EmeraldText)
-                        ) {
-                            Icon(Icons.Outlined.NotificationsActive, contentDescription = "Background Audit", modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("BG", fontFamily = CyberMono, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
+                    // One-tap FAST / DEEP model switch
+                    val isDeep = selectedDepth == AuditDepth.DEEP
+                    OutlinedButton(
+                        onClick = { selectedDepth = if (isDeep) AuditDepth.FAST else AuditDepth.DEEP },
+                        modifier = Modifier.height(50.dp),
+                        shape = TacticalPillShape,
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                        border = BorderStroke(1.dp, if (isDeep) AmberText else EmeraldText.copy(alpha = 0.7f)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (isDeep) AmberBg else MidnightBg,
+                            contentColor = if (isDeep) AmberText else EmeraldText
+                        )
+                    ) {
+                        Icon(
+                            imageVector = if (isDeep) Icons.Outlined.Psychology else Icons.Outlined.Bolt,
+                            contentDescription = "Toggle Fast or Deep Audit",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = selectedDepth.label.uppercase(),
+                            fontFamily = CyberMono,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            maxLines = 1
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = { onQueueBackgroundAudit(linkText, selectedType, selectedParty, selectedDepth) },
+                        enabled = linkText.isNotBlank(),
+                        modifier = Modifier.height(50.dp),
+                        shape = TacticalPillShape,
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                        border = BorderStroke(1.dp, CardBorder),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = TextPrimary)
+                    ) {
+                        Icon(Icons.Outlined.NotificationsActive, contentDescription = "Background Audit", modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("BG", fontFamily = CyberMono, fontWeight = FontWeight.Bold, fontSize = 11.sp, maxLines = 1)
                     }
                 }
+
+                Text(
+                    text = "▸ ${selectedDepth.label.uppercase()}: ${selectedDepth.hint}",
+                    fontFamily = CyberMono,
+                    fontSize = 10.sp,
+                    color = if (selectedDepth == AuditDepth.DEEP) AmberText else TextSecondary
+                )
             }
         }
 

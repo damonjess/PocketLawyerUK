@@ -15,6 +15,7 @@ import com.example.pocketlawyeruk.data.local.PocketLawyerDatabase
 import com.example.pocketlawyeruk.data.local.VaultMappers.toEntity
 import com.example.pocketlawyeruk.ui.screens.EncounterType
 import com.example.pocketlawyeruk.model.ConfrontingParty
+import com.example.pocketlawyeruk.model.AuditDepth
 import java.io.File
 
 class BackgroundAuditWorker(
@@ -29,6 +30,9 @@ class BackgroundAuditWorker(
         
         val partyName = inputData.getString(KEY_CONFRONTING_PARTY) ?: ConfrontingParty.AUTO.name
         val confrontingParty = runCatching { ConfrontingParty.valueOf(partyName) }.getOrDefault(ConfrontingParty.AUTO)
+
+        val depthName = inputData.getString(KEY_AUDIT_DEPTH) ?: AuditDepth.FAST.name
+        val auditDepth = runCatching { AuditDepth.valueOf(depthName) }.getOrDefault(AuditDepth.FAST)
 
         ensureChannel()
         if (LegalAuditService.getStoredApiKey(applicationContext).isBlank()) {
@@ -50,7 +54,8 @@ class BackgroundAuditWorker(
                 audioFile = downloadedAudio,
                 sourceUrl = url,
                 encounterType = encounterType,
-                confrontingParty = confrontingParty
+                confrontingParty = confrontingParty,
+                auditDepth = auditDepth
             )
 
             // Save offline to Room Vault
@@ -127,6 +132,7 @@ class BackgroundAuditWorker(
         const val KEY_URL = "audit_url"
         const val KEY_ENCOUNTER_TYPE = "encounter_type"
         const val KEY_CONFRONTING_PARTY = "confronting_party"
+        const val KEY_AUDIT_DEPTH = "audit_depth"
         const val EXTRA_OPEN_AUDIT_ID = "open_audit_id"
         private const val CHANNEL_ID = "pocket_lawyer_audits"
 
@@ -134,14 +140,16 @@ class BackgroundAuditWorker(
             context: Context,
             url: String,
             encounterType: EncounterType,
-            confrontingParty: ConfrontingParty = ConfrontingParty.AUTO
+            confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
+            auditDepth: AuditDepth = AuditDepth.FAST
         ) {
             val request = OneTimeWorkRequestBuilder<BackgroundAuditWorker>()
                 .setInputData(
                     workDataOf(
                         KEY_URL to url,
                         KEY_ENCOUNTER_TYPE to encounterType.name,
-                        KEY_CONFRONTING_PARTY to confrontingParty.name
+                        KEY_CONFRONTING_PARTY to confrontingParty.name,
+                        KEY_AUDIT_DEPTH to auditDepth.name
                     )
                 )
                 .setConstraints(

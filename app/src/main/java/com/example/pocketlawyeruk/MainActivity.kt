@@ -258,8 +258,8 @@ fun PocketLawyerRoot(
                             shareNonce = shareNonce,
                             audits = state.audits,
                             onAuditClick = { vm.openAudit(it) },
-                            onRunAudit = { url, uri, type, party -> vm.runAudit(context, url, uri, type, party) },
-                            onQueueBackgroundAudit = { url, type, party -> vm.queueBackgroundAudit(context, url, type, party) },
+                            onRunAudit = { url, uri, type, party, depth -> vm.runAudit(context, url, uri, type, party, depth) },
+                            onQueueBackgroundAudit = { url, type, party, depth -> vm.queueBackgroundAudit(context, url, type, party, depth) },
                             onOpenLiveCopilot = { showLiveCopilot = true }
                         )
                         AppTab.SCAN -> ScanAndLettersScreen(

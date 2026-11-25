@@ -516,6 +516,7 @@ private fun CyberTimelineCard(
 ) {
     val (badgeBg, badgeFg) = when (statement.verdict) {
         StatementVerdict.LAWFUL -> EmeraldBg to EmeraldText
+        StatementVerdict.PROCEDURAL_BREACH -> AmberBg to AmberText
         StatementVerdict.MISLEADING_CLAIM -> AmberBg to AmberText
         StatementVerdict.UNLAWFUL_DEMAND -> RoseBg to RoseText
     }

@@ -61,6 +61,7 @@ class LegalAuditService(
         sourceUrl: String?,
         encounterType: EncounterType,
         confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
+        auditDepth: AuditDepth = AuditDepth.FAST,
         onStatus: (String) -> Unit = {}
     ): AuditReport = withContext(Dispatchers.IO) {
         val mimeType = when (audioFile.extension.lowercase()) {
@@ -70,7 +71,7 @@ class LegalAuditService(
             else -> "audio/mp3"
         }
         val mediaPart = buildMediaPartFromFile(audioFile, mimeType, onStatus)
-        runAuditWithMediaPart(mediaPart, sourceUrl, null, encounterType, confrontingParty, onStatus)
+        runAuditWithMediaPart(mediaPart, sourceUrl, null, encounterType, confrontingParty, auditDepth, onStatus)
     }
 
     suspend fun analyzeVideoUri(
@@ -79,13 +80,14 @@ class LegalAuditService(
         sourceUrl: String?,
         encounterType: EncounterType,
         confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
+        auditDepth: AuditDepth = AuditDepth.FAST,
         onStatus: (String) -> Unit = {}
     ): AuditReport = withContext(Dispatchers.IO) {
         val mimeType = context.contentResolver.getType(videoUri) ?: "video/mp4"
         val tempFile = copyUriToTempFile(context, videoUri, "upload_clip")
         try {
             val mediaPart = buildMediaPartFromFile(tempFile, mimeType, onStatus)
-            runAuditWithMediaPart(mediaPart, sourceUrl, videoUri.toString(), encounterType, confrontingParty, onStatus)
+            runAuditWithMediaPart(mediaPart, sourceUrl, videoUri.toString(), encounterType, confrontingParty, auditDepth, onStatus)
         } finally {
             tempFile.delete()
         }
@@ -178,6 +180,7 @@ class LegalAuditService(
         videoUriString: String?,
         encounterType: EncounterType,
         confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
+        auditDepth: AuditDepth = AuditDepth.FAST,
         onStatus: (String) -> Unit = {}
     ): AuditReport {
         val bodyJson = JSONObject().apply {
@@ -189,24 +192,26 @@ class LegalAuditService(
                     put(JSONObject().put(
                         "text",
                         "${confrontingParty.promptDirective} " +
-                            "Listen to the full UK encounter. Auto-detect whether this occurred in ENGLAND_WALES, SCOTLAND, or NORTHERN_IRELAND " +
-                            "(from accents, force names, uniforms, or legislation mentioned) and apply that exact jurisdiction's law. " +
-                            "Group consecutive speech by the same speaker into combined transcript turns. " +
-                            "Fact-check all sides objectively and produce the 'What If This Happened to Me?' guide. " +
-                            "Category hint: ${encounterType.statuteSubtitle}. Return ONLY raw valid JSON with no extra commentary."
+                            "Listen carefully to the ENTIRE audio from 00:00 to the very last second without skipping any middle or late sections. " +
+                            "Step 1: Transcribe EVERY meaningful spoken turn chronologically in fullTranscript (do NOT compress a multi-minute video into 5–6 highlight lines). " +
+                            "Step 2: In timeline, create a separate card for EVERY legally or procedurally notable statement across the whole clip — including every stated ground for detention/search, every refusal to give name/collar number, every filming restriction, every threat or demand, every rude/unprofessional remark, and every accurate or mistaken right stated by the filmer. " +
+                            "Do NOT stop at 3 cards if more happens. Auto-detect ENGLAND_WALES, SCOTLAND, or NORTHERN_IRELAND. " +
+                            "Category hint: ${encounterType.statuteSubtitle}. Return ONLY raw valid JSON."
                     ))
                 })
             }))
             put("safetySettings", buildPermissiveSafetySettings())
             put("generationConfig", JSONObject().apply {
                 put("maxOutputTokens", 16384)
+                put("responseMimeType", "application/json")
                 put("thinkingConfig", JSONObject().put("thinkingLevel", "medium"))
             })
         }
 
+        val selectedModels = if (auditDepth == AuditDepth.DEEP) DEEP_AUDIT_MODELS else AUDIT_MODELS
         val rawText = executeGeminiText(
             bodyJson = bodyJson,
-            models = AUDIT_MODELS,
+            models = selectedModels,
             httpClient = auditClient,
             onStatus = onStatus
         )
@@ -855,6 +860,15 @@ class LegalAuditService(
             "gemini-3.6-flash",
             "gemini-3-flash-preview"
         )
+
+        private val DEEP_AUDIT_MODELS = listOf(
+            "gemini-4-hydrogen",
+            "gemini-3.8-flash",
+            "gemini-3.6-flash",
+            "gemini-3-flash-preview",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite"
+        )
         
         // Text-only endpoints (Law AI, Statute Intel, Live Co-Pilot, Case Q&A)
         // Backed by Gemma 4's 14,400/day free pools when Gemini Flash is spiked
@@ -893,35 +907,41 @@ class LegalAuditService(
         private val UK_LEGAL_AUDIT_PROMPT = """
             You are Pocket Lawyer UK, an objective UK legal auditor.
             Auto-detect the exact UK jurisdiction from audio cues (force names, accents, statutes):
-            - ENGLAND_WALES: PACE 1984 & Code A (GOWISELY), Road Traffic Act 1988, Police Reform Act 2002 s.50, Public Order Acts, Police Act 1996 s.89, Criminal Damage Act 1971 (s.1 actual damage, s.2 threats to destroy/damage), CAA Air Navigation Order (drones), NPCC Filming Guidance.
-            - SCOTLAND: Criminal Procedure (Scotland) Act 1995 (s.13 witness/suspect ID duty), Criminal Justice (Scotland) Act 2016, Scottish Stop & Search Code of Practice, Road Traffic Act 1988.
+            - ENGLAND_WALES: PACE 1984 & Code A (GOWISELY, s.24A citizen's arrest), Police Reform Act 2002 (s.50 ASB ID, Schedule 3 police complaints & conduct), College of Policing Body-Worn Video (BWV) APP, Road Traffic Act 1988, Public Order Act 1986, Police Act 1996 s.89, Criminal Damage Act 1971 (s.1 vs s.2), TCEA 2007 Schedule 12 (HCEAs/bailiffs), CAA Air Navigation Order (drones), NPCC Filming Guidance.
+            - SCOTLAND: Criminal Procedure (Scotland) Act 1995 (s.13 witness/suspect ID), Criminal Justice (Scotland) Act 2016, Scottish Stop & Search Code of Practice, Road Traffic Act 1988.
             - NORTHERN_IRELAND: PACE (Northern Ireland) Order 1989 & Code A, Justice and Security (NI) Act 2007.
 
-            Accurately classify EVERY speaker's "side":
-            - "OFFICER" = Police officers / PCSOs only.
-            - "STAFF_SECURITY" = Private site staff, security guards, receptionists, store managers, or council/civil enforcement workers.
-            - "PUBLIC" = The filmer, drone operator, auditor, driver, or uninvolved members of the public.
+            SPEAKER & DIARISATION RULES (CRITICAL):
+            - Track WHO is speaking by both voice AND meaning (e.g., an officer wears the bodycam and responds to complaints; the filmer/citizen asks why they weren't told, defends filming, or asks to make a complaint). Never flip speakers on the opening lines or merge two speakers into one turn.
+            - Classify EVERY speaker's "side":
+              * "OFFICER" = UK Police officers / PCSOs only.
+              * "STAFF_SECURITY" = Private site staff, security guards, store managers, HCEAs/bailiffs, or civil enforcement workers.
+              * "PUBLIC" = The filmer, drone operator, driver, debtor, or citizen.
 
-            Grade ALL sides objectively: flag unlawful orders/threats by police or staff AND flag legal myths repeated by filmers/auditors.
-            If no police stop & search occurred, mark all GOWISELY steps as "SKIPPED" and base "complianceScore" (0-100) on the overall legal conduct of the confronting party (police or staff/security).
-            Provide a concise 1-sentence "scoreSummary" explaining why the score is that number.
-
-            SPEAKER DIARISATION & COMPLETENESS RULES (CRITICAL):
-            - Always separate speakers accurately: the person recording, defending their right to film/fly a drone, or referencing their channel/audits is ALWAYS speaker="Filmer", side="PUBLIC". People challenging them, asking them to leave, citing site rules, or threatening police/citizen's arrest are "Staff"/"Security" (STAFF_SECURITY) or "Officer" (OFFICER). Never merge two different speakers into one transcript turn.
-            - Every single false claim, unlawful demand, threat (including unlawful citizen's arrest under PACE 1984 s.24A, threats to call police over lawful filming, or GDPR/number-plate myths), or significant lawful statement mentioned in "scoreSummary" or "takeaway" MUST have its own entry in "timeline".
-            - Do NOT return a 1-item timeline or 0 violations if "complianceScore" is below 100 — extract ALL legally notable statements (typically 3 to 8 cards) in chronological order.
+            COMPLETENESS, TRANSCRIPT & GOWISELY RULES (CRITICAL):
+            - TRANSCRIPT COMPLETENESS: Transcribe the full back-and-forth conversation chronologically across the entire recording (a 2–4 minute conversation should typically have 15–40+ transcript turns, never just 5–6 isolated lines with 60-second gaps).
+            - TIMELINE COMPLETENESS: Do NOT stop at 3 cards. Audit EVERY distinct legal claim, stated ground for detention/search (e.g., whether filming a building or parade actually meets s.43 Terrorism Act reasonable suspicion), refusal of officer identity/collar number, filming demand, complaint exchange, and filmer rights assertion across early, middle, and late timestamps. Expect 5–12+ timeline cards on a 2–4 minute encounter.
+            - Every distinct issue mentioned in "scoreSummary", "gowisely", or "takeaway" MUST have a matching card in "timeline".
+            - GOWISELY STRICT RULE:
+              * If NO police stop & search occurred, mark all 8 GOWISELY steps as "SKIPPED".
+              * If a police stop & search DID occur (including PACE s.1, MDA s.23, or Terrorism Act s.43), mark every step clearly stated as "VERIFIED", and mark EVERY omitted, delayed, or uncommunicated step (including missing station or missing entitlement to a copy of the search record) as "FLAGGED" — NEVER mark a missing mandatory step as "SKIPPED". Only "Warrant card (if plain-clothed)" may be "SKIPPED" when the officer is in full uniform.
+            - Choose the exact verdict:
+              * "LAWFUL" = Legally accurate statement, valid statutory exercise, or lawful assertion of rights.
+              * "PROCEDURAL_BREACH" = Breach of police/statutory procedure, GOWISELY omission, BWV failure, complaint dismissal, or unprofessional conduct.
+              * "UNLAWFUL_DEMAND" = Unlawful order, unlawful detention/search grounds, unlawful threat (including false citizen's arrest or criminal damage threat), assault, or criminal offence.
+              * "MISLEADING_CLAIM" = Factually wrong legal claim or myth (e.g., GDPR filming myth, wrong ID law claim).
 
             Return ONLY valid JSON:
             {
               "title": "Short descriptive title",
               "jurisdiction": "ENGLAND_WALES | SCOTLAND | NORTHERN_IRELAND",
               "complianceScore": 0,
-              "scoreSummary": "1-sentence plain-English reason for this score (e.g. 'Staff made 2 false filming claims and threatened criminal damage.')",
+              "scoreSummary": "1-sentence plain-English reason for this score clearly stating who breached law or procedure.",
               "officerViolationCount": 0,
               "staffViolationCount": 0,
               "publicMythCount": 0,
               "fullTranscript": [
-                { "timestampSeconds": 0, "speaker": "Officer | Staff | Security | Filmer | Citizen", "text": "Verbatim spoken line" }
+                { "timestampSeconds": 0, "speaker": "Officer | Staff | Security | HCEA | Filmer | Citizen", "text": "Verbatim spoken line" }
               ],
               "yourRights": ["Plain-English right with exact Act/Section"],
               "whatIfGuide": {
@@ -941,16 +961,25 @@ class LegalAuditService(
               ],
               "timeline": [
                 {
-                  "timestampSeconds": 12,
-                  "speaker": "Officer | Staff | Security | Filmer | Citizen",
-                  "side": "OFFICER | STAFF_SECURITY | PUBLIC",
-                  "quote": "Exact claim, threat, or order",
-                  "verdict": "LAWFUL | UNLAWFUL_DEMAND | MISLEADING_CLAIM",
-                  "citation": "Exact UK statute (distinguish s.1 vs s.2 Criminal Damage Act 1971, etc.)",
-                  "explanation": "Why this statement is legally true or false"
+                  "timestampSeconds": 10,
+                  "speaker": "Officer",
+                  "side": "OFFICER",
+                  "quote": "First notable statement or admission from early in the clip",
+                  "verdict": "PROCEDURAL_BREACH",
+                  "citation": "College of Policing BWV APP",
+                  "explanation": "Why this breaches procedure or law"
+                },
+                {
+                  "timestampSeconds": 45,
+                  "speaker": "Officer",
+                  "side": "OFFICER",
+                  "quote": "Second notable statement, complaint response, or demand from later in the clip",
+                  "verdict": "MISLEADING_CLAIM",
+                  "citation": "Police Reform Act 2002 Schedule 3",
+                  "explanation": "Why this statement is legally accurate or inaccurate"
                 }
               ],
-              "takeaway": "Plain-English verdict on everyone involved."
+              "takeaway": "Plain-English verdict covering the full encounter from start to finish."
             }
         """.trimIndent()
 

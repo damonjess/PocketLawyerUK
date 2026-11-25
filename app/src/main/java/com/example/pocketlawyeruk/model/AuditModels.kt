@@ -13,6 +13,7 @@ enum class GowiselyStatus { VERIFIED, FLAGGED, SKIPPED }
 
 enum class StatementVerdict(val label: String) {
     LAWFUL("Lawful"),
+    PROCEDURAL_BREACH("Breach"),
     UNLAWFUL_DEMAND("Unlawful"),
     MISLEADING_CLAIM("False / Myth")
 }
@@ -44,6 +45,11 @@ enum class ConfrontingParty(val label: String, val hint: String, val promptDirec
         hint = "Both UK Police and Private Staff/Security are present",
         promptDirective = "CONFIRMED BY USER: The person filming/auditing is ALWAYS side=\"PUBLIC\" (speaker=\"Filmer\"), while BOTH UK Police (side=\"OFFICER\") and Private Staff/Security (side=\"STAFF_SECURITY\") confront them. Keep all three roles strictly separated."
     )
+}
+
+enum class AuditDepth(val label: String, val hint: String) {
+    FAST("Fast", "Flash-Lite first (500/day, quickest turnaround)"),
+    DEEP("Deep", "Hydrogen / Full Flash first (full audio detail for long clips)")
 }
 
 data class GowiselyItem(

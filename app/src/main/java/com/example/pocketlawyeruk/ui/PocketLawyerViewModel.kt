@@ -223,12 +223,13 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
         context: Context,
         url: String,
         type: EncounterType,
-        confrontingParty: ConfrontingParty = ConfrontingParty.AUTO
+        confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
+        auditDepth: AuditDepth = AuditDepth.FAST
     ) {
         if (!requireApiKey()) return
-        BackgroundAuditWorker.enqueue(context, url, type, confrontingParty)
+        BackgroundAuditWorker.enqueue(context, url, type, confrontingParty, auditDepth)
         _uiState.update {
-            it.copy(errorMessage = "Queued in background. You can leave the app — a notification will fire when the legal dossier is ready.")
+            it.copy(errorMessage = "Queued in background (${auditDepth.label.uppercase()}). You can leave the app — a notification will fire when the legal dossier is ready.")
         }
     }
 
@@ -237,7 +238,8 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
         url: String,
         videoUri: Uri?,
         encounterType: EncounterType,
-        confrontingParty: ConfrontingParty = ConfrontingParty.AUTO
+        confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
+        auditDepth: AuditDepth = AuditDepth.FAST
     ) {
         if (!requireApiKey()) return
         if (videoUri == null && url.isBlank()) {
@@ -251,7 +253,7 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
             var downloadedAudio: File? = null
             try {
                 val report = if (videoUri != null) {
-                    auditService.analyzeVideoUri(context, videoUri, url.takeIf { it.isNotBlank() }, encounterType, confrontingParty) { status ->
+                    auditService.analyzeVideoUri(context, videoUri, url.takeIf { it.isNotBlank() }, encounterType, confrontingParty, auditDepth) { status ->
                         _uiState.update { it.copy(statusMessage = status.uppercase()) }
                     }
                 } else {
@@ -259,7 +261,7 @@ class PocketLawyerViewModel(application: Application) : AndroidViewModel(applica
                         _uiState.update { it.copy(statusMessage = status.uppercase()) }
                     }
                     _uiState.update { it.copy(statusMessage = "TRANSCRIBING & FACT-CHECKING UK LAW...") }
-                    auditService.analyzeAudioFile(downloadedAudio, url.trim(), encounterType, confrontingParty) { status ->
+                    auditService.analyzeAudioFile(downloadedAudio, url.trim(), encounterType, confrontingParty, auditDepth) { status ->
                         _uiState.update { it.copy(statusMessage = status.uppercase()) }
                     }
                 }
