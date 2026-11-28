@@ -52,6 +52,49 @@ enum class AuditDepth(val label: String, val hint: String) {
     DEEP("Deep", "Hydrogen / Full Flash first (full audio detail for long clips)")
 }
 
+enum class AuditSection(val label: String) {
+    STREET_POLICE("Street / Police"),
+    BAILIFF_WARRANT("Warrants & Bailiffs")
+}
+
+enum class BailiffCallerRole(val label: String, val hint: String, val promptDirective: String) {
+    AUTO(
+        label = "Auto",
+        hint = "AI detects bailiff, debt collector, council, or utility caller",
+        promptDirective = "Auto-detect whether the caller/visitor is a Certificated Enforcement Agent/HCEA (Bailiff), an ordinary unlicensed Debt Collector, a Council/Court officer, or an Energy Warrant agent."
+    ),
+    BAILIFF(
+        label = "Bailiff",
+        hint = "Certificated Enforcement Agent / HCEA (TCEA 2007 Sch 12)",
+        promptDirective = "CONFIRMED BY USER: The caller/visitor claims to be a Certificated Enforcement Agent (Bailiff) or High Court Enforcement Agent (HCEA). Audit strictly against TCEA 2007 Schedule 12 and the May 2026 Taking Control of Goods Regulations."
+    ),
+    DEBT_COLLECTOR(
+        label = "Debt Coll",
+        hint = "Unlicensed Debt Collector — ZERO bailiff or entry powers",
+        promptDirective = "CONFIRMED BY USER: The caller/visitor is an ordinary Debt Collector (NOT a court-appointed bailiff). They have ZERO statutory power to force entry, seize goods, or claim court warrant authority."
+    ),
+    UTILITY_COURT(
+        label = "Utility/Ct",
+        hint = "Energy warrant, Council Tax, or Magistrates' / County Court call",
+        promptDirective = "CONFIRMED BY USER: This call/visit relates to a utility/energy warrant, council tax enforcement, or court fine warrant. Verify exact entry powers and warrant prerequisites."
+    )
+}
+
+enum class BailiffDebtType(val label: String, val promptHint: String) {
+    AUTO("Auto-Detect", "Auto-detect debt or warrant type from the audio"),
+    COUNCIL_TAX("Council Tax", "Council Tax Liability Order (NO forced entry to home on first visit)"),
+    CCJ_HCEA("CCJ / High Court", "County Court Judgment / High Court Writ (NO forced entry to domestic home on first visit)"),
+    PARKING_PCN("Parking / PCN", "Unpaid Penalty Charge Notice / Traffic debt (NO forced entry to home)"),
+    COURT_FINE_HMRC("Fine / HMRC", "Magistrates' Court criminal fine or HMRC tax debt (forced entry possible ONLY as last resort with valid warrant/notice)"),
+    ENERGY_WARRANT("Energy Warrant", "Gas/Electricity prepayment meter or disconnection warrant (requires separate Magistrates' Court warrant under Rights of Entry Act 1954 & Ofgem vulnerability checks)"),
+    PHONE_SCAM("Suspected Scam", "Suspected fake bailiff / phone warrant scam (check for instant bank transfer demands, refusal to give certificate/firm details, or fake arrest/locksmith threats)")
+}
+
+data class BailiffAuditConfig(
+    val callerRole: BailiffCallerRole = BailiffCallerRole.AUTO,
+    val debtType: BailiffDebtType = BailiffDebtType.AUTO
+)
+
 data class GowiselyItem(
     val step: String,
     val status: GowiselyStatus,

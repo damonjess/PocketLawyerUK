@@ -62,16 +62,19 @@ class LegalAuditService(
         encounterType: EncounterType,
         confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
         auditDepth: AuditDepth = AuditDepth.FAST,
+        bailiffConfig: BailiffAuditConfig? = null,
         onStatus: (String) -> Unit = {}
     ): AuditReport = withContext(Dispatchers.IO) {
         val mimeType = when (audioFile.extension.lowercase()) {
             "m4a" -> "audio/mp4"
             "mp4" -> "video/mp4"
             "webm" -> "video/webm"
+            "wav" -> "audio/wav"
+            "ogg" -> "audio/ogg"
             else -> "audio/mp3"
         }
         val mediaPart = buildMediaPartFromFile(audioFile, mimeType, onStatus)
-        runAuditWithMediaPart(mediaPart, sourceUrl, null, encounterType, confrontingParty, auditDepth, onStatus)
+        runAuditWithMediaPart(mediaPart, sourceUrl, null, encounterType, confrontingParty, auditDepth, bailiffConfig, onStatus)
     }
 
     suspend fun analyzeVideoUri(
@@ -81,13 +84,14 @@ class LegalAuditService(
         encounterType: EncounterType,
         confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
         auditDepth: AuditDepth = AuditDepth.FAST,
+        bailiffConfig: BailiffAuditConfig? = null,
         onStatus: (String) -> Unit = {}
     ): AuditReport = withContext(Dispatchers.IO) {
         val mimeType = context.contentResolver.getType(videoUri) ?: "video/mp4"
         val tempFile = copyUriToTempFile(context, videoUri, "upload_clip")
         try {
             val mediaPart = buildMediaPartFromFile(tempFile, mimeType, onStatus)
-            runAuditWithMediaPart(mediaPart, sourceUrl, videoUri.toString(), encounterType, confrontingParty, auditDepth, onStatus)
+            runAuditWithMediaPart(mediaPart, sourceUrl, videoUri.toString(), encounterType, confrontingParty, auditDepth, bailiffConfig, onStatus)
         } finally {
             tempFile.delete()
         }
@@ -181,23 +185,33 @@ class LegalAuditService(
         encounterType: EncounterType,
         confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
         auditDepth: AuditDepth = AuditDepth.FAST,
+        bailiffConfig: BailiffAuditConfig? = null,
         onStatus: (String) -> Unit = {}
     ): AuditReport {
+        val systemPrompt = if (bailiffConfig != null) UK_BAILIFF_WARRANT_PROMPT else UK_LEGAL_AUDIT_PROMPT
+        val userPrompt = if (bailiffConfig != null) {
+            "${bailiffConfig.callerRole.promptDirective} " +
+                "Debt/Warrant context: ${bailiffConfig.debtType.promptHint}. " +
+                "Listen carefully to the ENTIRE phone call or video from 00:00 to the very last second without skipping sections. " +
+                "Step 1: Transcribe EVERY meaningful spoken turn chronologically in fullTranscript. " +
+                "Step 2: In timeline, fact-check EVERY legal claim, threat, warrant claim, notice period claim, fee claim, locksmith/police threat, or right stated by either the caller/agent or the householder/debtor (do NOT stop at 3 cards if more happens). " +
+                "Auto-detect ENGLAND_WALES, SCOTLAND, or NORTHERN_IRELAND and apply current UK law as of November 2026. Return ONLY raw valid JSON."
+        } else {
+            "${confrontingParty.promptDirective} " +
+                "Listen carefully to the ENTIRE audio from 00:00 to the very last second without skipping any middle or late sections. " +
+                "Step 1: Transcribe EVERY meaningful spoken turn chronologically in fullTranscript (do NOT compress a multi-minute video into 5–6 highlight lines). " +
+                "Step 2: In timeline, create a separate card for EVERY legally or procedurally notable statement across the whole clip — including every stated ground for detention/search, every refusal to give name/collar number, every filming restriction, every threat or demand, every rude/unprofessional remark, and every accurate or mistaken right stated by the filmer. " +
+                "Do NOT stop at 3 cards if more happens. Auto-detect ENGLAND_WALES, SCOTLAND, or NORTHERN_IRELAND. " +
+                "Category hint: ${encounterType.statuteSubtitle}. Return ONLY raw valid JSON."
+        }
+
         val bodyJson = JSONObject().apply {
-            put("system_instruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", UK_LEGAL_AUDIT_PROMPT))))
+            put("system_instruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemPrompt))))
             put("contents", JSONArray().put(JSONObject().apply {
                 put("role", "user")
                 put("parts", JSONArray().apply {
                     put(mediaPart)
-                    put(JSONObject().put(
-                        "text",
-                        "${confrontingParty.promptDirective} " +
-                            "Listen carefully to the ENTIRE audio from 00:00 to the very last second without skipping any middle or late sections. " +
-                            "Step 1: Transcribe EVERY meaningful spoken turn chronologically in fullTranscript (do NOT compress a multi-minute video into 5–6 highlight lines). " +
-                            "Step 2: In timeline, create a separate card for EVERY legally or procedurally notable statement across the whole clip — including every stated ground for detention/search, every refusal to give name/collar number, every filming restriction, every threat or demand, every rude/unprofessional remark, and every accurate or mistaken right stated by the filmer. " +
-                            "Do NOT stop at 3 cards if more happens. Auto-detect ENGLAND_WALES, SCOTLAND, or NORTHERN_IRELAND. " +
-                            "Category hint: ${encounterType.statuteSubtitle}. Return ONLY raw valid JSON."
-                    ))
+                    put(JSONObject().put("text", userPrompt))
                 })
             }))
             put("safetySettings", buildPermissiveSafetySettings())
@@ -215,7 +229,7 @@ class LegalAuditService(
             httpClient = auditClient,
             onStatus = onStatus
         )
-        return parseAuditJson(rawText, sourceUrl, videoUriString, encounterType, confrontingParty)
+        return parseAuditJson(rawText, sourceUrl, videoUriString, encounterType, confrontingParty, isBailiffAudit = bailiffConfig != null)
     }
 
     private fun buildPermissiveSafetySettings(): JSONArray = JSONArray().apply {
@@ -678,7 +692,8 @@ class LegalAuditService(
         sourceUrl: String?,
         videoUriString: String?,
         encounterType: EncounterType,
-        confrontingParty: ConfrontingParty = ConfrontingParty.AUTO
+        confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
+        isBailiffAudit: Boolean = false
     ): AuditReport {
         val json = JSONObject(extractJsonObject(rawJson))
 
@@ -768,27 +783,26 @@ class LegalAuditService(
             }
         }
 
-        // If user explicitly locked Staff, hide GOWISELY matrix cleanly
-        val finalGowisely = if (confrontingParty == ConfrontingParty.STAFF) {
+        // Hide GOWISELY cleanly for staff-only or bailiff/warrant audits
+        val finalGowisely = if (isBailiffAudit || confrontingParty == ConfrontingParty.STAFF) {
             gowisely.map { it.copy(status = GowiselyStatus.SKIPPED) }
         } else {
             gowisely
         }
 
-        val officerViolations = when (confrontingParty) {
-            ConfrontingParty.POLICE -> timeline.count { it.side == SpeakerSide.OFFICER && it.verdict != StatementVerdict.LAWFUL }
-            ConfrontingParty.STAFF -> 0
-            else -> json.optInt("officerViolationCount", timeline.count { it.side == SpeakerSide.OFFICER && it.verdict != StatementVerdict.LAWFUL })
+        val officerViolations = when {
+            isBailiffAudit -> timeline.count { it.side == SpeakerSide.OFFICER && it.verdict != StatementVerdict.LAWFUL }
+            confrontingParty == ConfrontingParty.POLICE -> timeline.count { it.side == SpeakerSide.OFFICER && it.verdict != StatementVerdict.LAWFUL }
+            confrontingParty == ConfrontingParty.STAFF -> 0
+            else -> timeline.count { it.side == SpeakerSide.OFFICER && it.verdict != StatementVerdict.LAWFUL }
         }
-        val staffViolations = when (confrontingParty) {
-            ConfrontingParty.STAFF -> timeline.count { it.side == SpeakerSide.STAFF_SECURITY && it.verdict != StatementVerdict.LAWFUL }
-            ConfrontingParty.POLICE -> 0
-            else -> json.optInt("staffViolationCount", timeline.count { it.side == SpeakerSide.STAFF_SECURITY && it.verdict != StatementVerdict.LAWFUL })
+        val staffViolations = when {
+            isBailiffAudit -> timeline.count { it.side == SpeakerSide.STAFF_SECURITY && it.verdict != StatementVerdict.LAWFUL }
+            confrontingParty == ConfrontingParty.STAFF -> timeline.count { it.side == SpeakerSide.STAFF_SECURITY && it.verdict != StatementVerdict.LAWFUL }
+            confrontingParty == ConfrontingParty.POLICE -> 0
+            else -> timeline.count { it.side == SpeakerSide.STAFF_SECURITY && it.verdict != StatementVerdict.LAWFUL }
         }
-        val publicMyths = json.optInt(
-            "publicMythCount",
-            timeline.count { it.side == SpeakerSide.PUBLIC && it.verdict != StatementVerdict.LAWFUL }
-        )
+        val publicMyths = timeline.count { it.side == SpeakerSide.PUBLIC && it.verdict != StatementVerdict.LAWFUL }
 
         val today = SimpleDateFormat("d MMM", Locale.UK).format(Date())
         return AuditReport(
@@ -903,6 +917,91 @@ class LegalAuditService(
                 .putString(PREF_API_KEY, key.trim())
                 .apply()
         }
+
+        private val UK_BAILIFF_WARRANT_PROMPT = """
+            You are Pocket Lawyer UK's Bailiff, Warrant & Debt Call Fact-Checker (current UK law as of November 2026).
+            Audit phone calls, voicemails, and doorstep/video encounters involving bailiffs (enforcement agents), High Court Enforcement Agents (HCEAs), debt collectors, council tax offices, court warrant claims, or energy warrant agents.
+
+            CURRENT UK LAW ANCHORS (NOVEMBER 2026):
+            - England & Wales — Tribunals, Courts and Enforcement Act 2007 (TCEA 2007) Schedule 12, Taking Control of Goods Regulations 2013, and Taking Control of Goods (Miscellaneous Amendments) Regulations 2026 (SI 2026/366, in force 1 May 2026):
+              * Notice of Enforcement (post-1 May 2026): Must give at least 14 clear days' notice before a visit/taking control of goods (doubled from the old 7-day rule; excludes Sundays, bank holidays, Good Friday, Christmas Day). Extendable to 28 clear days if a recognised debt advice provider submits a request in time for non-business debts. Notice MUST mention free debt advice, contact details, and the 28-day extension right. Flag any caller claiming "7 days" or threatening an immediate/same-day visit without a valid notice.
+              * Fees (post-1 May 2026): Statutory fees rose ~5% on 1 May 2026, with the 7.5% percentage threshold starting at £1,900 (ordinary) and £1,200 (High Court). Flag invented or inflated fees.
+              * Forced Entry Rules: Bailiffs CANNOT force entry to a domestic home on a first visit (and cannot push past, block a door with a foot, or enter via windows) for Council Tax, parking PCNs, CCJs, credit cards/loans, domestic High Court writs, or energy arrears. Forced entry (reasonable force / locksmith as a last resort) is ONLY lawful for unpaid Magistrates' Court criminal fines, HMRC tax debts, or re-entry after a broken Controlled Goods Agreement (plus commercial premises).
+              * Arrest Threats: You CANNOT be arrested for refusing to open the door to a bailiff or for ordinary civil debt. Flag any threat of police arrest for civil debt or refusing entry as UNLAWFUL_DEMAND / MISLEADING_CLAIM.
+              * Debt Collectors vs Bailiffs: Ordinary debt collectors have ZERO court warrant or seizure powers and must leave if asked. Falsely pretending to have bailiff/court powers, threatening fake warrants/locksmiths, or harassing debtors breaches Administration of Justice Act 1970 s.40, FCA CONC 7, and potentially Fraud Act 2006.
+              * Hours, Vulnerability & Protected Goods: Visits allowed 6am–9pm only. Cannot enter if only children under 16 or vulnerable people are present. Exempt goods: essential household items (clothes, cooker, fridge, bedding), third-party goods, and work tools/equipment up to £1,350.
+              * Proof & Phone Scam Red Flags: Real bailiffs must give their name, company, certificate/court authority, head office number, and written breakdown — they NEVER demand an instant bank transfer to a sort code/account number over the phone under threat of imminent arrest or locksmiths.
+              * Energy / Utility Warrants: Forcing entry to fit a prepayment meter or disconnect requires a SEPARATE Magistrates' Court warrant under the Rights of Entry (Gas and Electricity Boards) Act 1954 plus Ofgem vulnerability safeguards.
+              * Regulation & Complaints (Nov 2026): Independent complaints go to the Enforcement Conduct Board (ECB). Note that mandatory statutory ECB accreditation was announced by the Government in August 2026 (taking effect in 2027, alongside new ECB Vulnerability Standards in January 2027) — do not claim statutory mandatory accreditation is already in force in November 2026.
+              * Obstructing a lawful enforcement agent is an offence under TCEA 2007 Schedule 12 Para 68 — also fact-check any false "freeman on the land" / "wet-ink signature" / "magna carta" myths claimed by the debtor/caller!
+            - Scotland: England & Wales bailiffs and TCEA 2007 do NOT apply — enforcement is via Sheriff Officers / Messengers-at-Arms under the Debtors (Scotland) Act 1987 (requires Charge for Payment).
+            - Northern Ireland: Enforcement of Judgments Office (EJO) under the Judgments Enforcement (NI) Order 1981 (no private doorstep bailiffs).
+
+            SPEAKER & COMPLETENESS RULES (CRITICAL):
+            - Classify EVERY speaker's "side":
+              * "STAFF_SECURITY" = Bailiff, HCEA, Enforcement Agent, Debt Collector, Council/Court Caller, or Energy Warrant Agent (use specific speaker labels: "Bailiff", "HCEA", "Debt Collector", "Caller", "Agent").
+              * "OFFICER" = ONLY if an actual UK Police officer speaks in the recording.
+              * "PUBLIC" = The debtor, householder, tenant, or person making/recording the phone call (speaker: "Householder" or "Debtor").
+            - Transcribe the full call chronologically in "fullTranscript".
+            - Fact-check EVERY legally notable claim, threat, fee/notice statement, warrant assertion, or debtor counter-claim across the entire recording (typically 4–12 timeline cards on a multi-minute call — NEVER stop at 1–3 cards if more happens).
+            - Mark ALL 8 "gowisely" entries as "SKIPPED" (GOWISELY is for police stop & search, not bailiffs/warrants).
+            - Verdicts:
+              * "LAWFUL" = Accurate statement of UK enforcement/debt law or lawful right.
+              * "PROCEDURAL_BREACH" = Breach of TCEA 2007 notice/hours/ID/vulnerability rules or ECB/FCA standards.
+              * "UNLAWFUL_DEMAND" = False threat of forced entry/locksmith/arrest, impersonating a bailiff, unlawful harassment (AJA 1970 s.40), or scam coercion.
+              * "MISLEADING_CLAIM" = Factually wrong legal claim or myth (from either the agent/caller OR the debtor/householder, including freeman/wet-ink myths).
+
+            Return ONLY valid JSON matching the exact Pocket Lawyer UK schema:
+            {
+              "title": "Short descriptive title (e.g. Council Tax Bailiff Forced Entry Claim)",
+              "jurisdiction": "ENGLAND_WALES | SCOTLAND | NORTHERN_IRELAND",
+              "complianceScore": 0,
+              "scoreSummary": "1-sentence summary stating whether the caller/agent's warrant or bailiff claims comply with UK law.",
+              "officerViolationCount": 0,
+              "staffViolationCount": 0,
+              "publicMythCount": 0,
+              "fullTranscript": [
+                { "timestampSeconds": 0, "speaker": "Bailiff | Debt Collector | Caller | Householder", "text": "Verbatim spoken line" }
+              ],
+              "yourRights": ["Plain-English UK bailiff/warrant right with exact Act & Section"],
+              "whatIfGuide": {
+                "whatYouCanRefuse": ["Concrete thing you can lawfully refuse on this call or at the door"],
+                "whatYouMustDo": ["Practical lawful step to take (e.g. verify certificate, check Notice of Enforcement date, contact council/court directly)"],
+                "exactScriptToSay": "Calm, polite 2-sentence script citing the exact UK law to say on the phone or through the door"
+              },
+              "gowisely": [
+                { "step": "Grounds for search", "status": "SKIPPED", "note": "Not applicable to bailiff/warrant calls" },
+                { "step": "Object of search", "status": "SKIPPED", "note": "Not applicable" },
+                { "step": "Warrant card (if plain-clothed)", "status": "SKIPPED", "note": "Not applicable" },
+                { "step": "Identity of officer", "status": "SKIPPED", "note": "Not applicable" },
+                { "step": "Station attached to", "status": "SKIPPED", "note": "Not applicable" },
+                { "step": "Entitlement to copy of record", "status": "SKIPPED", "note": "Not applicable" },
+                { "step": "Legislation being applied", "status": "SKIPPED", "note": "Not applicable" },
+                { "step": "You are detained for a search", "status": "SKIPPED", "note": "Not applicable" }
+              ],
+              "timeline": [
+                {
+                  "timestampSeconds": 12,
+                  "speaker": "Caller",
+                  "side": "STAFF_SECURITY",
+                  "quote": "First claim or threat from the call/video",
+                  "verdict": "UNLAWFUL_DEMAND",
+                  "citation": "TCEA 2007 Schedule 12 / Administration of Justice Act 1970 s.40",
+                  "explanation": "Plain-English fact-check explaining whether this claim is true or false under November 2026 UK law"
+                },
+                {
+                  "timestampSeconds": 48,
+                  "speaker": "Householder",
+                  "side": "PUBLIC",
+                  "quote": "Second claim or response from later in the call",
+                  "verdict": "LAWFUL",
+                  "citation": "Taking Control of Goods (Miscellaneous Amendments) Regulations 2026",
+                  "explanation": "Plain-English verification of this statement"
+                }
+              ],
+              "takeaway": "Plain-English final verdict on whether the warrant/bailiff claims in this clip are legally real, exaggerated, or unlawful."
+            }
+        """.trimIndent()
 
         private val UK_LEGAL_AUDIT_PROMPT = """
             You are Pocket Lawyer UK, an objective UK legal auditor.

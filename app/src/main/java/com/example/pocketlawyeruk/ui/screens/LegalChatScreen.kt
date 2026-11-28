@@ -95,7 +95,7 @@ fun LegalChatScreen(
         )
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(MidnightBg)) {
+    Column(modifier = Modifier.fillMaxSize().background(MidnightBg).imePadding()) {
         // Header with Read-Aloud Toggle + Clear
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),

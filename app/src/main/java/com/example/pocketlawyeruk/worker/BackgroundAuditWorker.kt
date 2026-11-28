@@ -14,8 +14,7 @@ import com.example.pocketlawyeruk.data.VideoAudioExtractor
 import com.example.pocketlawyeruk.data.local.PocketLawyerDatabase
 import com.example.pocketlawyeruk.data.local.VaultMappers.toEntity
 import com.example.pocketlawyeruk.ui.screens.EncounterType
-import com.example.pocketlawyeruk.model.ConfrontingParty
-import com.example.pocketlawyeruk.model.AuditDepth
+import com.example.pocketlawyeruk.model.*
 import java.io.File
 
 class BackgroundAuditWorker(
@@ -33,6 +32,15 @@ class BackgroundAuditWorker(
 
         val depthName = inputData.getString(KEY_AUDIT_DEPTH) ?: AuditDepth.FAST.name
         val auditDepth = runCatching { AuditDepth.valueOf(depthName) }.getOrDefault(AuditDepth.FAST)
+
+        val bRole = inputData.getString(KEY_BAILIFF_ROLE)
+        val bDebt = inputData.getString(KEY_BAILIFF_DEBT)
+        val bailiffConfig = if (bRole != null && bDebt != null) {
+            BailiffAuditConfig(
+                callerRole = runCatching { BailiffCallerRole.valueOf(bRole) }.getOrDefault(BailiffCallerRole.AUTO),
+                debtType = runCatching { BailiffDebtType.valueOf(bDebt) }.getOrDefault(BailiffDebtType.AUTO)
+            )
+        } else null
 
         ensureChannel()
         if (LegalAuditService.getStoredApiKey(applicationContext).isBlank()) {
@@ -55,7 +63,8 @@ class BackgroundAuditWorker(
                 sourceUrl = url,
                 encounterType = encounterType,
                 confrontingParty = confrontingParty,
-                auditDepth = auditDepth
+                auditDepth = auditDepth,
+                bailiffConfig = bailiffConfig
             )
 
             // Save offline to Room Vault
@@ -133,6 +142,8 @@ class BackgroundAuditWorker(
         const val KEY_ENCOUNTER_TYPE = "encounter_type"
         const val KEY_CONFRONTING_PARTY = "confronting_party"
         const val KEY_AUDIT_DEPTH = "audit_depth"
+        const val KEY_BAILIFF_ROLE = "bailiff_role"
+        const val KEY_BAILIFF_DEBT = "bailiff_debt"
         const val EXTRA_OPEN_AUDIT_ID = "open_audit_id"
         private const val CHANNEL_ID = "pocket_lawyer_audits"
 
@@ -141,17 +152,22 @@ class BackgroundAuditWorker(
             url: String,
             encounterType: EncounterType,
             confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
-            auditDepth: AuditDepth = AuditDepth.FAST
+            auditDepth: AuditDepth = AuditDepth.FAST,
+            bailiffConfig: BailiffAuditConfig? = null
         ) {
+            val dataBuilder = Data.Builder()
+                .putString(KEY_URL, url)
+                .putString(KEY_ENCOUNTER_TYPE, encounterType.name)
+                .putString(KEY_CONFRONTING_PARTY, confrontingParty.name)
+                .putString(KEY_AUDIT_DEPTH, auditDepth.name)
+
+            if (bailiffConfig != null) {
+                dataBuilder.putString(KEY_BAILIFF_ROLE, bailiffConfig.callerRole.name)
+                dataBuilder.putString(KEY_BAILIFF_DEBT, bailiffConfig.debtType.name)
+            }
+
             val request = OneTimeWorkRequestBuilder<BackgroundAuditWorker>()
-                .setInputData(
-                    workDataOf(
-                        KEY_URL to url,
-                        KEY_ENCOUNTER_TYPE to encounterType.name,
-                        KEY_CONFRONTING_PARTY to confrontingParty.name,
-                        KEY_AUDIT_DEPTH to auditDepth.name
-                    )
-                )
+                .setInputData(dataBuilder.build())
                 .setConstraints(
                     Constraints.Builder()
                         .setRequiredNetworkType(NetworkType.CONNECTED)

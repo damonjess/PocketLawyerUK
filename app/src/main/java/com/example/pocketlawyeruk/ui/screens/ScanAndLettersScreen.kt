@@ -72,6 +72,7 @@ fun ScanAndLettersScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MidnightBg)
+            .imePadding()
             .verticalScroll(scrollState)
             .padding(horizontal = 18.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)

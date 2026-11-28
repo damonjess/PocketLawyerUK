@@ -6,6 +6,10 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -16,9 +20,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -48,6 +54,17 @@ fun AuditReportScreen(
     // null = ALL CLAIMS, otherwise filter by specific SpeakerSide
     var selectedSide by remember(report.id) { mutableStateOf<SpeakerSide?>(null) }
 
+    val scrollState = rememberScrollState()
+    var isFollowUpFocused by remember { mutableStateOf(false) }
+    val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
+
+    // Automatically scroll the input card above the keyboard whenever it opens
+    LaunchedEffect(imeBottomPx, isFollowUpFocused) {
+        if (isFollowUpFocused && imeBottomPx > 0) {
+            scrollState.animateScrollTo(scrollState.maxValue)
+        }
+    }
+
     val exoPlayer = remember(report.videoUriString) {
         if (report.videoUriString != null) {
             ExoPlayer.Builder(context).build().apply {
@@ -70,6 +87,16 @@ fun AuditReportScreen(
         report.staffViolationCount > 0 ||
             report.timeline.any { it.side == SpeakerSide.STAFF_SECURITY }
     }
+    val isBailiffDossier = remember(report.timeline) {
+        report.timeline.any {
+            it.speaker.contains("Bailiff", true) ||
+                it.speaker.contains("HCEA", true) ||
+                it.speaker.contains("Collector", true) ||
+                it.speaker.contains("Caller", true) ||
+                it.speaker.contains("Agent", true)
+        }
+    }
+    val staffPillLabel = if (isBailiffDossier) "${report.staffViolationCount} CALLER FLAGS" else "${report.staffViolationCount} STAFF FLAGS"
 
     val scoreColor = when {
         report.complianceScore >= 80 -> EmeraldText
@@ -133,7 +160,9 @@ fun AuditReportScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .verticalScroll(rememberScrollState())
+                .consumeWindowInsets(innerPadding)
+                .imePadding()
+                .verticalScroll(scrollState)
                 .padding(horizontal = 18.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -204,7 +233,7 @@ fun AuditReportScreen(
                             }
                             if (hasStaffInClip) {
                                 StatusCountPill(
-                                    label = "${report.staffViolationCount} STAFF FLAGS",
+                                    label = staffPillLabel,
                                     isClear = report.staffViolationCount == 0,
                                     alertBg = RoseBg,
                                     alertFg = RoseText
@@ -422,7 +451,9 @@ fun AuditReportScreen(
                                 focusedTextColor = TextPrimary,
                                 unfocusedTextColor = TextPrimary
                             ),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                .onFocusChanged { isFollowUpFocused = it.isFocused }
                         )
                         Spacer(Modifier.width(8.dp))
                         IconButton(
