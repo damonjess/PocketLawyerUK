@@ -42,8 +42,23 @@ fun HomeScreen(
     shareNonce: Int = 0,
     audits: List<AuditReport>,
     onAuditClick: (String) -> Unit,
-    onRunAudit: (url: String, videoUri: Uri?, type: EncounterType, party: ConfrontingParty, depth: AuditDepth, bailiffConfig: BailiffAuditConfig?) -> Unit,
-    onQueueBackgroundAudit: (url: String, type: EncounterType, party: ConfrontingParty, depth: AuditDepth, bailiffConfig: BailiffAuditConfig?) -> Unit,
+    onRunAudit: (
+        url: String,
+        videoUri: Uri?,
+        type: EncounterType,
+        party: ConfrontingParty,
+        depth: AuditDepth,
+        bailiffConfig: BailiffAuditConfig?,
+        everydayConfig: EverydayAuditConfig?
+    ) -> Unit,
+    onQueueBackgroundAudit: (
+        url: String,
+        type: EncounterType,
+        party: ConfrontingParty,
+        depth: AuditDepth,
+        bailiffConfig: BailiffAuditConfig?,
+        everydayConfig: EverydayAuditConfig?
+    ) -> Unit,
     onOpenLiveCopilot: () -> Unit = {}
 ) {
     val clipboardManager = LocalClipboardManager.current
@@ -55,6 +70,7 @@ fun HomeScreen(
     var activeSection by remember { mutableStateOf(AuditSection.STREET_POLICE) }
     var bailiffRole by remember { mutableStateOf(BailiffCallerRole.AUTO) }
     var bailiffDebt by remember { mutableStateOf(BailiffDebtType.AUTO) }
+    var everydayTopic by remember { mutableStateOf(EverydayTopic.AUTO) }
 
     val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -150,25 +166,29 @@ fun HomeScreen(
             }
         }
 
-        // Section Mode Switcher: Street/Police vs Warrants & Bailiffs
+        // 3-Way Section Mode Switcher
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             AuditSection.entries.forEach { section ->
                 val selected = activeSection == section
-                val activeColor = if (section == AuditSection.BAILIFF_WARRANT) AmberText else CreamAccent
+                val activeColor = when (section) {
+                    AuditSection.STREET_POLICE -> CreamAccent
+                    AuditSection.BAILIFF_WARRANT -> AmberText
+                    AuditSection.EVERYDAY_UK -> EmeraldText
+                }
                 Surface(
                     shape = TacticalPillShape,
                     color = if (selected) activeColor else CardSurface,
                     border = BorderStroke(1.dp, if (selected) activeColor else CardBorder),
                     modifier = Modifier.weight(1f).clickable { activeSection = section }
                 ) {
-                    Box(modifier = Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                    Box(modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp), contentAlignment = Alignment.Center) {
                         Text(
                             text = section.label.uppercase(),
                             fontFamily = CyberMono,
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (selected) CreamTextDark else TextPrimary,
                             maxLines = 1
@@ -189,15 +209,20 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Text(
-                    text = if (activeSection == AuditSection.BAILIFF_WARRANT)
-                        "[ WARRANT & BAILIFF CALL FACT-CHECK ]"
-                    else
-                        "[ TARGET VIDEO INTERCEPT ]",
+                    text = when (activeSection) {
+                        AuditSection.STREET_POLICE -> "[ TARGET VIDEO INTERCEPT ]"
+                        AuditSection.BAILIFF_WARRANT -> "[ WARRANT & BAILIFF CALL FACT-CHECK ]"
+                        AuditSection.EVERYDAY_UK -> "[ EVERYDAY UK LAW FACT-CHECK ]"
+                    },
                     fontFamily = CyberMono,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.2.sp,
-                    color = if (activeSection == AuditSection.BAILIFF_WARRANT) AmberText else CreamAccent
+                    color = when (activeSection) {
+                        AuditSection.STREET_POLICE -> CreamAccent
+                        AuditSection.BAILIFF_WARRANT -> AmberText
+                        AuditSection.EVERYDAY_UK -> EmeraldText
+                    }
                 )
 
                 // Link Input + Embedded Paste Trigger
@@ -272,10 +297,11 @@ fun HomeScreen(
                     Text(
                         text = if (selectedVideoUri != null)
                             "REPLACE LOCAL FILE"
-                        else if (activeSection == AuditSection.BAILIFF_WARRANT)
-                            "UPLOAD CALL VIDEO / AUDIO"
-                        else
-                            "LOAD LOCAL VIDEO FILE",
+                        else when (activeSection) {
+                            AuditSection.STREET_POLICE -> "LOAD LOCAL VIDEO FILE"
+                            AuditSection.BAILIFF_WARRANT -> "UPLOAD CALL VIDEO / AUDIO"
+                            AuditSection.EVERYDAY_UK -> "UPLOAD VIDEO / AUDIO CLIP"
+                        },
                         fontFamily = CyberMono,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
@@ -302,173 +328,224 @@ fun HomeScreen(
                     }
                 }
 
-                if (activeSection == AuditSection.STREET_POLICE) {
-                    // Confronting Party Lock (Police vs Staff / Security)
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "WHO IS IN THE CLIP?",
-                            fontFamily = CyberMono,
-                            fontSize = 11.sp,
-                            color = TextSecondary,
-                            letterSpacing = 1.sp
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            ConfrontingParty.entries.forEach { party ->
-                                val isSelected = party == selectedParty
-                                Surface(
-                                    shape = TacticalPillShape,
-                                    color = if (isSelected) CreamAccent else MidnightBg,
-                                    border = BorderStroke(1.dp, if (isSelected) CreamAccent else CardBorder),
-                                    modifier = Modifier.weight(1f).clickable { selectedParty = party }
-                                ) {
-                                    Box(
-                                        modifier = Modifier.padding(vertical = 8.dp),
-                                        contentAlignment = Alignment.Center
+                when (activeSection) {
+                    AuditSection.STREET_POLICE -> {
+                        // Confronting Party Lock (Police vs Staff / Security)
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "WHO IS IN THE CLIP?",
+                                fontFamily = CyberMono,
+                                fontSize = 11.sp,
+                                color = TextSecondary,
+                                letterSpacing = 1.sp
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                ConfrontingParty.entries.forEach { party ->
+                                    val isSelected = party == selectedParty
+                                    Surface(
+                                        shape = TacticalPillShape,
+                                        color = if (isSelected) CreamAccent else MidnightBg,
+                                        border = BorderStroke(1.dp, if (isSelected) CreamAccent else CardBorder),
+                                        modifier = Modifier.weight(1f).clickable { selectedParty = party }
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.padding(vertical = 8.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = party.label.uppercase(),
+                                                fontFamily = CyberMono,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isSelected) CreamTextDark else TextPrimary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            Text(
+                                text = "▸ ${selectedParty.hint}",
+                                fontFamily = CyberMono,
+                                fontSize = 11.sp,
+                                color = if (selectedParty == ConfrontingParty.AUTO) TextSecondary else EmeraldText
+                            )
+                        }
+
+                        // Encounter Category Selector
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("CLASSIFICATION HINT", fontFamily = CyberMono, fontSize = 11.sp, color = TextSecondary, letterSpacing = 1.sp)
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                EncounterType.entries.forEach { type ->
+                                    val isSelected = type == selectedType
+                                    Surface(
+                                        shape = TacticalPillShape,
+                                        color = if (isSelected) CreamAccent else MidnightBg,
+                                        border = BorderStroke(1.dp, if (isSelected) CreamAccent else CardBorder),
+                                        modifier = Modifier.clickable { selectedType = type }
                                     ) {
                                         Text(
-                                            text = party.label.uppercase(),
+                                            text = type.label.uppercase(),
                                             fontFamily = CyberMono,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = if (isSelected) CreamTextDark else TextPrimary,
-                                            maxLines = 1
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
                                         )
                                     }
                                 }
                             }
+                            Text(
+                                text = "▸ ${selectedType.statuteSubtitle} • Jurisdiction auto-detected",
+                                fontFamily = CyberMono,
+                                fontSize = 11.sp,
+                                color = TextSecondary
+                            )
                         }
-                        Text(
-                            text = "▸ ${selectedParty.hint}",
-                            fontFamily = CyberMono,
-                            fontSize = 11.sp,
-                            color = if (selectedParty == ConfrontingParty.AUTO) TextSecondary else EmeraldText
-                        )
                     }
-
-                    // Encounter Category Selector
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("CLASSIFICATION HINT", fontFamily = CyberMono, fontSize = 11.sp, color = TextSecondary, letterSpacing = 1.sp)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            EncounterType.entries.forEach { type ->
-                                val isSelected = type == selectedType
-                                Surface(
-                                    shape = TacticalPillShape,
-                                    color = if (isSelected) CreamAccent else MidnightBg,
-                                    border = BorderStroke(1.dp, if (isSelected) CreamAccent else CardBorder),
-                                    modifier = Modifier.clickable { selectedType = type }
-                                ) {
-                                    Text(
-                                        text = type.label.uppercase(),
-                                        fontFamily = CyberMono,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isSelected) CreamTextDark else TextPrimary,
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
-                                    )
+                    AuditSection.BAILIFF_WARRANT -> {
+                        // Caller / Visitor Role Selector
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "WHO IS ON THE PHONE / AT THE DOOR?",
+                                fontFamily = CyberMono,
+                                fontSize = 11.sp,
+                                color = TextSecondary,
+                                letterSpacing = 1.sp
+                            )
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                BailiffCallerRole.entries.forEach { role ->
+                                    val isSelected = role == bailiffRole
+                                    Surface(
+                                        shape = TacticalPillShape,
+                                        color = if (isSelected) AmberText else MidnightBg,
+                                        border = BorderStroke(1.dp, if (isSelected) AmberText else CardBorder),
+                                        modifier = Modifier.weight(1f).clickable { bailiffRole = role }
+                                    ) {
+                                        Box(modifier = Modifier.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                                            Text(
+                                                text = role.label.uppercase(),
+                                                fontFamily = CyberMono,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isSelected) CreamTextDark else TextPrimary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
                                 }
                             }
+                            Text(
+                                text = "▸ ${bailiffRole.hint}",
+                                fontFamily = CyberMono,
+                                fontSize = 11.sp,
+                                color = if (bailiffRole == BailiffCallerRole.AUTO) TextSecondary else AmberText
+                            )
                         }
-                        Text(
-                            text = "▸ ${selectedType.statuteSubtitle} • Jurisdiction auto-detected",
-                            fontFamily = CyberMono,
-                            fontSize = 11.sp,
-                            color = TextSecondary
-                        )
-                    }
-                } else {
-                    // Caller / Visitor Role Selector
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "WHO IS ON THE PHONE / AT THE DOOR?",
-                            fontFamily = CyberMono,
-                            fontSize = 11.sp,
-                            color = TextSecondary,
-                            letterSpacing = 1.sp
-                        )
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            BailiffCallerRole.entries.forEach { role ->
-                                val isSelected = role == bailiffRole
-                                Surface(
-                                    shape = TacticalPillShape,
-                                    color = if (isSelected) AmberText else MidnightBg,
-                                    border = BorderStroke(1.dp, if (isSelected) AmberText else CardBorder),
-                                    modifier = Modifier.weight(1f).clickable { bailiffRole = role }
-                                ) {
-                                    Box(modifier = Modifier.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+
+                        // Debt / Warrant Category Chips
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "WARRANT OR DEBT TYPE",
+                                fontFamily = CyberMono,
+                                fontSize = 11.sp,
+                                color = TextSecondary,
+                                letterSpacing = 1.sp
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                BailiffDebtType.entries.forEach { debt ->
+                                    val isSelected = debt == bailiffDebt
+                                    Surface(
+                                        shape = TacticalPillShape,
+                                        color = if (isSelected) AmberBg else MidnightBg,
+                                        border = BorderStroke(1.dp, if (isSelected) AmberText else CardBorder),
+                                        modifier = Modifier.clickable { bailiffDebt = debt }
+                                    ) {
                                         Text(
-                                            text = role.label.uppercase(),
+                                            text = debt.label.uppercase(),
                                             fontFamily = CyberMono,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (isSelected) CreamTextDark else TextPrimary,
-                                            maxLines = 1
+                                            color = if (isSelected) AmberText else TextSecondary,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                                         )
                                     }
                                 }
                             }
                         }
-                        Text(
-                            text = "▸ ${bailiffRole.hint}",
-                            fontFamily = CyberMono,
-                            fontSize = 11.sp,
-                            color = if (bailiffRole == BailiffCallerRole.AUTO) TextSecondary else AmberText
-                        )
                     }
-
-                    // Debt / Warrant Category Chips
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "WARRANT OR DEBT TYPE",
-                            fontFamily = CyberMono,
-                            fontSize = 11.sp,
-                            color = TextSecondary,
-                            letterSpacing = 1.sp
-                        )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            BailiffDebtType.entries.forEach { debt ->
-                                val isSelected = debt == bailiffDebt
-                                Surface(
-                                    shape = TacticalPillShape,
-                                    color = if (isSelected) AmberBg else MidnightBg,
-                                    border = BorderStroke(1.dp, if (isSelected) AmberText else CardBorder),
-                                    modifier = Modifier.clickable { bailiffDebt = debt }
-                                ) {
-                                    Text(
-                                        text = debt.label.uppercase(),
-                                        fontFamily = CyberMono,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (isSelected) AmberText else TextSecondary,
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                    )
+                    AuditSection.EVERYDAY_UK -> {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "SCENARIO / UK LAW PACK",
+                                fontFamily = CyberMono,
+                                fontSize = 11.sp,
+                                color = TextSecondary,
+                                letterSpacing = 1.sp
+                            )
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                EverydayTopic.entries.forEach { topic ->
+                                    val isSelected = topic == everydayTopic
+                                    Surface(
+                                        shape = TacticalPillShape,
+                                        color = if (isSelected) EmeraldBg else MidnightBg,
+                                        border = BorderStroke(1.dp, if (isSelected) EmeraldText else CardBorder),
+                                        modifier = Modifier.clickable { everydayTopic = topic }
+                                    ) {
+                                        Text(
+                                            text = topic.label.uppercase(),
+                                            fontFamily = CyberMono,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isSelected) EmeraldText else TextSecondary,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                        )
+                                    }
                                 }
                             }
+                            Text(
+                                text = "▸ ${everydayTopic.hint}",
+                                fontFamily = CyberMono,
+                                fontSize = 11.sp,
+                                color = if (everydayTopic == EverydayTopic.AUTO) TextSecondary else EmeraldText
+                            )
                         }
                     }
                 }
 
                 val activeBailiffConfig = if (activeSection == AuditSection.BAILIFF_WARRANT) {
                     BailiffAuditConfig(bailiffRole, bailiffDebt)
-                } else {
-                    null
-                }
+                } else null
+
+                val activeEverydayConfig = if (activeSection == AuditSection.EVERYDAY_UK) {
+                    EverydayAuditConfig(everydayTopic)
+                } else null
 
                 // 3-button row: RUN AUDIT + FAST/DEEP toggle + BG
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Button(
-                        onClick = { onRunAudit(linkText, selectedVideoUri, selectedType, selectedParty, selectedDepth, activeBailiffConfig) },
+                        onClick = {
+                            onRunAudit(linkText, selectedVideoUri, selectedType, selectedParty, selectedDepth, activeBailiffConfig, activeEverydayConfig)
+                        },
                         enabled = canRunAudit,
                         modifier = Modifier.weight(1f).height(50.dp),
                         shape = TacticalPillShape,
                         contentPadding = PaddingValues(horizontal = 10.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (activeSection == AuditSection.BAILIFF_WARRANT) AmberText else CreamAccent,
+                            containerColor = when (activeSection) {
+                                AuditSection.STREET_POLICE -> CreamAccent
+                                AuditSection.BAILIFF_WARRANT -> AmberText
+                                AuditSection.EVERYDAY_UK -> EmeraldText
+                            },
                             contentColor = CreamTextDark,
                             disabledContainerColor = MutedButtonBg,
                             disabledContentColor = TextSecondary
@@ -508,7 +585,9 @@ fun HomeScreen(
                     }
 
                     OutlinedButton(
-                        onClick = { onQueueBackgroundAudit(linkText, selectedType, selectedParty, selectedDepth, activeBailiffConfig) },
+                        onClick = {
+                            onQueueBackgroundAudit(linkText, selectedType, selectedParty, selectedDepth, activeBailiffConfig, activeEverydayConfig)
+                        },
                         enabled = linkText.isNotBlank(),
                         modifier = Modifier.height(50.dp),
                         shape = TacticalPillShape,

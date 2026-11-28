@@ -53,8 +53,47 @@ enum class AuditDepth(val label: String, val hint: String) {
 }
 
 enum class AuditSection(val label: String) {
-    STREET_POLICE("Street / Police"),
-    BAILIFF_WARRANT("Warrants & Bailiffs")
+    STREET_POLICE("Street/Police"),
+    BAILIFF_WARRANT("Bailiffs"),
+    EVERYDAY_UK("Everyday UK")
+}
+
+enum class EverydayTopic(val label: String, val hint: String, val promptDirective: String) {
+    AUTO(
+        label = "Auto-Detect",
+        hint = "AI detects TV Licensing, landlord, shop, parking, rail, or consumer law",
+        promptDirective = "Auto-detect which UK everyday legal scenario this clip involves (TV Licensing, Landlord/Tenant, Shop Security, Private Parking, Rail/Bus Ticket Inspector, or Consumer/Neighbour dispute) and apply the exact matching UK statutes."
+    ),
+    TV_LICENSING(
+        label = "TV Licensing",
+        hint = "Capita doorstep visits (Communications Act 2003 s.366)",
+        promptDirective = "CONFIRMED BY USER: This is a UK TV Licensing (Capita) doorstep or enforcement visit. Audit strictly under Communications Act 2003 s.366, PACE caution rules for Record of Interview forms, implied right of access withdrawal, and right to silence."
+    ),
+    LANDLORD_TENANT(
+        label = "Landlord",
+        hint = "Evictions, locks & Renters' Rights Act 2025 (in force May 2026)",
+        promptDirective = "CONFIRMED BY USER: This is a UK landlord/letting agent vs tenant/lodger dispute. Apply the Renters' Rights Act 2025 (in force 1 May 2026 in England — Section 21 abolished, Section 8 grounds + court warrant required; separate regimes in Wales/Scotland) and Protection from Eviction Act 1977 (illegal lockouts/harassment)."
+    ),
+    SHOP_SECURITY(
+        label = "Shop Security",
+        hint = "Receipt checks, bag searches & PACE s.24A citizen's arrest",
+        promptDirective = "CONFIRMED BY USER: This is a UK retail / shop security encounter (receipt check, bag search, ban, or detention). Audit strictly under PACE 1984 s.24A (citizen's arrest for indictable offences only), civil trespass/store bans, and current Nov 2026 Crime and Policing Act 2026 status."
+    ),
+    PRIVATE_PARKING(
+        label = "Parking",
+        hint = "Private wardens, clamping ban (PoFA 2012) & 2026 Parking Code",
+        promptDirective = "CONFIRMED BY USER: This is a UK private parking warden, PCN, or clamping/towing dispute. Audit under Protection of Freedoms Act 2012 (s.54 clamping ban & Sch 4 keeper liability) and note the Private Parking Code of Practice 2026 status (due 21 Dec 2026)."
+    ),
+    TRANSPORT_RPO(
+        label = "Train / Bus",
+        hint = "Ticket inspectors / RPOs (Regulation of Railways Act 1889 s.5)",
+        promptDirective = "CONFIRMED BY USER: This is a UK train, tram, or bus ticket inspector / Revenue Protection Officer (RPO) encounter. Audit under Regulation of Railways Act 1889 s.5 (duty to give name & address if suspected of fare evasion), Railway Byelaws, and limits on private RPO physical detention."
+    ),
+    CONSUMER_NEIGHBOUR(
+        label = "Consumer / Home",
+        hint = "Car dealers, refunds (CRA 2015), Ring CCTV & driveways",
+        promptDirective = "CONFIRMED BY USER: This is a UK consumer dispute (car dealer/refunds under Consumer Rights Act 2015) or neighbour/driveway/CCTV dispute (Data Protection Act 2018 domestic CCTV limits, civil trespass vs highway obstruction)."
+    )
 }
 
 enum class BailiffCallerRole(val label: String, val hint: String, val promptDirective: String) {
@@ -93,6 +132,10 @@ enum class BailiffDebtType(val label: String, val promptHint: String) {
 data class BailiffAuditConfig(
     val callerRole: BailiffCallerRole = BailiffCallerRole.AUTO,
     val debtType: BailiffDebtType = BailiffDebtType.AUTO
+)
+
+data class EverydayAuditConfig(
+    val topic: EverydayTopic = EverydayTopic.AUTO
 )
 
 data class GowiselyItem(

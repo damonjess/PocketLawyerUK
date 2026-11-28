@@ -42,6 +42,11 @@ class BackgroundAuditWorker(
             )
         } else null
 
+        val everydayTopicName = inputData.getString(KEY_EVERYDAY_TOPIC)
+        val everydayConfig = everydayTopicName?.let {
+            EverydayAuditConfig(runCatching { EverydayTopic.valueOf(it) }.getOrDefault(EverydayTopic.AUTO))
+        }
+
         ensureChannel()
         if (LegalAuditService.getStoredApiKey(applicationContext).isBlank()) {
             postCompletionNotification(
@@ -64,7 +69,8 @@ class BackgroundAuditWorker(
                 encounterType = encounterType,
                 confrontingParty = confrontingParty,
                 auditDepth = auditDepth,
-                bailiffConfig = bailiffConfig
+                bailiffConfig = bailiffConfig,
+                everydayConfig = everydayConfig
             )
 
             // Save offline to Room Vault
@@ -144,6 +150,7 @@ class BackgroundAuditWorker(
         const val KEY_AUDIT_DEPTH = "audit_depth"
         const val KEY_BAILIFF_ROLE = "bailiff_role"
         const val KEY_BAILIFF_DEBT = "bailiff_debt"
+        const val KEY_EVERYDAY_TOPIC = "everyday_topic"
         const val EXTRA_OPEN_AUDIT_ID = "open_audit_id"
         private const val CHANNEL_ID = "pocket_lawyer_audits"
 
@@ -153,7 +160,8 @@ class BackgroundAuditWorker(
             encounterType: EncounterType,
             confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
             auditDepth: AuditDepth = AuditDepth.FAST,
-            bailiffConfig: BailiffAuditConfig? = null
+            bailiffConfig: BailiffAuditConfig? = null,
+            everydayConfig: EverydayAuditConfig? = null
         ) {
             val dataBuilder = Data.Builder()
                 .putString(KEY_URL, url)
@@ -164,6 +172,10 @@ class BackgroundAuditWorker(
             if (bailiffConfig != null) {
                 dataBuilder.putString(KEY_BAILIFF_ROLE, bailiffConfig.callerRole.name)
                 dataBuilder.putString(KEY_BAILIFF_DEBT, bailiffConfig.debtType.name)
+            }
+
+            if (everydayConfig != null) {
+                dataBuilder.putString(KEY_EVERYDAY_TOPIC, everydayConfig.topic.name)
             }
 
             val request = OneTimeWorkRequestBuilder<BackgroundAuditWorker>()

@@ -87,16 +87,18 @@ fun AuditReportScreen(
         report.staffViolationCount > 0 ||
             report.timeline.any { it.side == SpeakerSide.STAFF_SECURITY }
     }
-    val isBailiffDossier = remember(report.timeline) {
+    val staffPillLabel = when {
         report.timeline.any {
-            it.speaker.contains("Bailiff", true) ||
-                it.speaker.contains("HCEA", true) ||
-                it.speaker.contains("Collector", true) ||
-                it.speaker.contains("Caller", true) ||
-                it.speaker.contains("Agent", true)
-        }
+            it.speaker.contains("Bailiff", true) || it.speaker.contains("HCEA", true) ||
+                it.speaker.contains("Collector", true) || it.speaker.contains("Caller", true)
+        } -> "${report.staffViolationCount} CALLER FLAGS"
+        report.timeline.any {
+            it.speaker.contains("Landlord", true) || it.speaker.contains("TV Licensing", true) ||
+                it.speaker.contains("Dealer", true) || it.speaker.contains("Inspector", true) ||
+                it.speaker.contains("Warden", true) || it.speaker.contains("Neighbour", true)
+        } -> "${report.staffViolationCount} PARTY FLAGS"
+        else -> "${report.staffViolationCount} STAFF FLAGS"
     }
-    val staffPillLabel = if (isBailiffDossier) "${report.staffViolationCount} CALLER FLAGS" else "${report.staffViolationCount} STAFF FLAGS"
 
     val scoreColor = when {
         report.complianceScore >= 80 -> EmeraldText

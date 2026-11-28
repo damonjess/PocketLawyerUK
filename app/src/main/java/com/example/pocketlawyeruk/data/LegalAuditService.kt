@@ -63,6 +63,7 @@ class LegalAuditService(
         confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
         auditDepth: AuditDepth = AuditDepth.FAST,
         bailiffConfig: BailiffAuditConfig? = null,
+        everydayConfig: EverydayAuditConfig? = null,
         onStatus: (String) -> Unit = {}
     ): AuditReport = withContext(Dispatchers.IO) {
         val mimeType = when (audioFile.extension.lowercase()) {
@@ -74,7 +75,9 @@ class LegalAuditService(
             else -> "audio/mp3"
         }
         val mediaPart = buildMediaPartFromFile(audioFile, mimeType, onStatus)
-        runAuditWithMediaPart(mediaPart, sourceUrl, null, encounterType, confrontingParty, auditDepth, bailiffConfig, onStatus)
+        runAuditWithMediaPart(
+            mediaPart, sourceUrl, null, encounterType, confrontingParty, auditDepth, bailiffConfig, everydayConfig, onStatus
+        )
     }
 
     suspend fun analyzeVideoUri(
@@ -85,13 +88,16 @@ class LegalAuditService(
         confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
         auditDepth: AuditDepth = AuditDepth.FAST,
         bailiffConfig: BailiffAuditConfig? = null,
+        everydayConfig: EverydayAuditConfig? = null,
         onStatus: (String) -> Unit = {}
     ): AuditReport = withContext(Dispatchers.IO) {
         val mimeType = context.contentResolver.getType(videoUri) ?: "video/mp4"
         val tempFile = copyUriToTempFile(context, videoUri, "upload_clip")
         try {
             val mediaPart = buildMediaPartFromFile(tempFile, mimeType, onStatus)
-            runAuditWithMediaPart(mediaPart, sourceUrl, videoUri.toString(), encounterType, confrontingParty, auditDepth, bailiffConfig, onStatus)
+            runAuditWithMediaPart(
+                mediaPart, sourceUrl, videoUri.toString(), encounterType, confrontingParty, auditDepth, bailiffConfig, everydayConfig, onStatus
+            )
         } finally {
             tempFile.delete()
         }
@@ -186,23 +192,38 @@ class LegalAuditService(
         confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
         auditDepth: AuditDepth = AuditDepth.FAST,
         bailiffConfig: BailiffAuditConfig? = null,
+        everydayConfig: EverydayAuditConfig? = null,
         onStatus: (String) -> Unit = {}
     ): AuditReport {
-        val systemPrompt = if (bailiffConfig != null) UK_BAILIFF_WARRANT_PROMPT else UK_LEGAL_AUDIT_PROMPT
-        val userPrompt = if (bailiffConfig != null) {
-            "${bailiffConfig.callerRole.promptDirective} " +
-                "Debt/Warrant context: ${bailiffConfig.debtType.promptHint}. " +
-                "Listen carefully to the ENTIRE phone call or video from 00:00 to the very last second without skipping sections. " +
-                "Step 1: Transcribe EVERY meaningful spoken turn chronologically in fullTranscript. " +
-                "Step 2: In timeline, fact-check EVERY legal claim, threat, warrant claim, notice period claim, fee claim, locksmith/police threat, or right stated by either the caller/agent or the householder/debtor (do NOT stop at 3 cards if more happens). " +
-                "Auto-detect ENGLAND_WALES, SCOTLAND, or NORTHERN_IRELAND and apply current UK law as of November 2026. Return ONLY raw valid JSON."
-        } else {
-            "${confrontingParty.promptDirective} " +
-                "Listen carefully to the ENTIRE audio from 00:00 to the very last second without skipping any middle or late sections. " +
-                "Step 1: Transcribe EVERY meaningful spoken turn chronologically in fullTranscript (do NOT compress a multi-minute video into 5–6 highlight lines). " +
-                "Step 2: In timeline, create a separate card for EVERY legally or procedurally notable statement across the whole clip — including every stated ground for detention/search, every refusal to give name/collar number, every filming restriction, every threat or demand, every rude/unprofessional remark, and every accurate or mistaken right stated by the filmer. " +
-                "Do NOT stop at 3 cards if more happens. Auto-detect ENGLAND_WALES, SCOTLAND, or NORTHERN_IRELAND. " +
-                "Category hint: ${encounterType.statuteSubtitle}. Return ONLY raw valid JSON."
+        val systemPrompt = when {
+            bailiffConfig != null -> UK_BAILIFF_WARRANT_PROMPT
+            everydayConfig != null -> UK_EVERYDAY_LAW_PROMPT
+            else -> UK_LEGAL_AUDIT_PROMPT
+        }
+
+        val userPrompt = when {
+            bailiffConfig != null ->
+                "${bailiffConfig.callerRole.promptDirective} " +
+                    "Debt/Warrant context: ${bailiffConfig.debtType.promptHint}. " +
+                    "Listen carefully to the ENTIRE phone call or video from 00:00 to the very last second without skipping sections. " +
+                    "Step 1: Transcribe EVERY meaningful spoken turn chronologically in fullTranscript. " +
+                    "Step 2: In timeline, fact-check EVERY legal claim, threat, warrant claim, notice period claim, fee claim, locksmith/police threat, or right stated by either side (do NOT stop at 3 cards if more happens). " +
+                    "Auto-detect ENGLAND_WALES, SCOTLAND, or NORTHERN_IRELAND and apply current UK law as of November 2026. Return ONLY raw valid JSON."
+
+            everydayConfig != null ->
+                "${everydayConfig.topic.promptDirective} " +
+                    "Listen carefully to the ENTIRE video or audio from 00:00 to the very last second without skipping sections. " +
+                    "Step 1: Transcribe EVERY meaningful spoken turn chronologically in fullTranscript. " +
+                    "Step 2: In timeline, fact-check EVERY legal claim, entry/search demand, eviction/notice claim, refund refusal, fine/ticket demand, or citizen counter-claim across the whole clip (do NOT stop at 3 cards if more happens). " +
+                    "Auto-detect ENGLAND_WALES, SCOTLAND, or NORTHERN_IRELAND and apply current UK law as of November 2026. Return ONLY raw valid JSON."
+
+            else ->
+                "${confrontingParty.promptDirective} " +
+                    "Listen carefully to the ENTIRE audio from 00:00 to the very last second without skipping any middle or late sections. " +
+                    "Step 1: Transcribe EVERY meaningful spoken turn chronologically in fullTranscript (do NOT compress a multi-minute video into 5–6 highlight lines). " +
+                    "Step 2: In timeline, create a separate card for EVERY legally or procedurally notable statement across the whole clip — including every stated ground for detention/search, every refusal to give name/collar number, every filming restriction, every threat or demand, every rude/unprofessional remark, and every accurate or mistaken right stated by the filmer. " +
+                    "Do NOT stop at 3 cards if more happens. Auto-detect ENGLAND_WALES, SCOTLAND, or NORTHERN_IRELAND. " +
+                    "Category hint: ${encounterType.statuteSubtitle}. Return ONLY raw valid JSON."
         }
 
         val bodyJson = JSONObject().apply {
@@ -229,7 +250,14 @@ class LegalAuditService(
             httpClient = auditClient,
             onStatus = onStatus
         )
-        return parseAuditJson(rawText, sourceUrl, videoUriString, encounterType, confrontingParty, isBailiffAudit = bailiffConfig != null)
+        return parseAuditJson(
+            rawJson = rawText,
+            sourceUrl = sourceUrl,
+            videoUriString = videoUriString,
+            encounterType = encounterType,
+            confrontingParty = confrontingParty,
+            isNonPoliceMode = bailiffConfig != null || everydayConfig != null
+        )
     }
 
     private fun buildPermissiveSafetySettings(): JSONArray = JSONArray().apply {
@@ -693,7 +721,7 @@ class LegalAuditService(
         videoUriString: String?,
         encounterType: EncounterType,
         confrontingParty: ConfrontingParty = ConfrontingParty.AUTO,
-        isBailiffAudit: Boolean = false
+        isNonPoliceMode: Boolean = false
     ): AuditReport {
         val json = JSONObject(extractJsonObject(rawJson))
 
@@ -783,21 +811,21 @@ class LegalAuditService(
             }
         }
 
-        // Hide GOWISELY cleanly for staff-only or bailiff/warrant audits
-        val finalGowisely = if (isBailiffAudit || confrontingParty == ConfrontingParty.STAFF) {
+        // Hide GOWISELY cleanly for staff-only or bailiff/warrant/everyday audits
+        val finalGowisely = if (isNonPoliceMode || confrontingParty == ConfrontingParty.STAFF) {
             gowisely.map { it.copy(status = GowiselyStatus.SKIPPED) }
         } else {
             gowisely
         }
 
         val officerViolations = when {
-            isBailiffAudit -> timeline.count { it.side == SpeakerSide.OFFICER && it.verdict != StatementVerdict.LAWFUL }
+            isNonPoliceMode -> timeline.count { it.side == SpeakerSide.OFFICER && it.verdict != StatementVerdict.LAWFUL }
             confrontingParty == ConfrontingParty.POLICE -> timeline.count { it.side == SpeakerSide.OFFICER && it.verdict != StatementVerdict.LAWFUL }
             confrontingParty == ConfrontingParty.STAFF -> 0
             else -> timeline.count { it.side == SpeakerSide.OFFICER && it.verdict != StatementVerdict.LAWFUL }
         }
         val staffViolations = when {
-            isBailiffAudit -> timeline.count { it.side == SpeakerSide.STAFF_SECURITY && it.verdict != StatementVerdict.LAWFUL }
+            isNonPoliceMode -> timeline.count { it.side == SpeakerSide.STAFF_SECURITY && it.verdict != StatementVerdict.LAWFUL }
             confrontingParty == ConfrontingParty.STAFF -> timeline.count { it.side == SpeakerSide.STAFF_SECURITY && it.verdict != StatementVerdict.LAWFUL }
             confrontingParty == ConfrontingParty.POLICE -> 0
             else -> timeline.count { it.side == SpeakerSide.STAFF_SECURITY && it.verdict != StatementVerdict.LAWFUL }
@@ -917,6 +945,108 @@ class LegalAuditService(
                 .putString(PREF_API_KEY, key.trim())
                 .apply()
         }
+
+        private val UK_EVERYDAY_LAW_PROMPT = """
+            You are Pocket Lawyer UK's Everyday Disputes Fact-Checker (current UK law as of November 2026).
+            Audit recordings and videos covering UK TV Licensing visits, landlord/tenant arguments, shop security stops, private parking wardens, train/bus ticket inspectors, and consumer/neighbour disputes.
+
+            CURRENT UK LAW ANCHORS (NOVEMBER 2026):
+            1. TV LICENSING (CAPITA DOORSTEP VISITS):
+               - Communications Act 2003 s.366: TV Licensing officers are private contractors (NOT police, NOT bailiffs). They have ZERO right of entry without a Magistrates' Court search warrant (or Sheriff warrant in Scotland).
+               - Householders can refuse entry, withdraw implied right of access and tell them to leave, refuse to give their name, remain silent, and refuse to sign a "Record of Interview" (TVL178). Any formal questioning about an offence requires a PACE caution.
+               - Note: Watching live broadcast TV (any channel/streaming service) or BBC iPlayer still requires a TV licence; Netflix/YouTube on-demand only does not.
+
+            2. LANDLORDS, LOCKOUTS & EVICTIONS:
+               - England — Renters' Rights Act 2025 (in force 1 May 2026): Assured Shorthold Tenancies (ASTs), fixed terms, and Section 21 "no-fault" evictions are ABOLISHED for private tenancies (all existing ASTs automatically became rolling Assured Periodic Tenancies; pre-1 May 2026 s.21 notices expired if no court claim was filed by 31 July 2026). Landlords MUST serve a valid Section 8 notice with a statutory ground (e.g., 4 weeks for rent arrears, 4 months to sell/move in) and obtain a court possession order + bailiff warrant. Rent can only rise once a year on a statutory form with 2 months' notice (challengeable at tribunal); max 1 month's rent in advance; tenants can request a pet and landlords cannot unreasonably refuse.
+               - Protection from Eviction Act 1977: Changing locks, cutting off utilities, threatening tenants, or forcing a tenant out without a court warrant is a CRIMINAL OFFENCE (note: excluded occupiers / lodgers living with a resident landlord have separate "reasonable notice" rules and are not covered by the Renters' Rights Act).
+               - Landlord access: Must give at least 24 hours' written notice and obtain tenant consent for routine visits (only genuine emergencies justify immediate entry); tenants have the right to quiet enjoyment.
+               - Wales uses Renting Homes (Wales) Act 2016 (occupation contracts); Scotland uses Private Housing (Tenancies) (Scotland) Act 2016 (PRTs).
+
+            3. SHOP SECURITY, RECEIPT CHECKS & BAG SEARCHES:
+               - Private shop staff/SIA guards have NO general power to force bag searches or receipt checks once goods are paid for (unless an explicit club membership condition like Costco applies — refusal then only permits revoking membership or asking you to leave, NOT physical detention).
+               - Citizen's Arrest (PACE 1984 s.24A in E&W): Only lawful where an indictable offence (such as theft) is being committed or has been committed and there are reasonable grounds to suspect the person. Detaining someone merely for refusing a receipt/bag check without genuine reasonable suspicion of theft risks civil false imprisonment and assault.
+               - Retailers CAN ban individuals from private premises (revoking permission to enter) and ask them to leave.
+               - Crime and Policing Act 2026 (Royal Assent 29 April 2026): Creates a standalone offence of assaulting a retail worker (ss.45–47) and repeals the £200 shop-theft summary threshold (MCA 1980 s.22A), BUT as of November 2026 the retail-worker assault sections in England & Wales are STILL AWAITING COMMENCEMENT REGULATIONS (currently charged as common assault under CJA 1988 s.39 / ABH; Scotland has had a live retail worker protection offence since 2021).
+
+            4. PRIVATE PARKING WARDENS & CLAMPING:
+               - Protection of Freedoms Act 2012 s.54: Wheel-clamping and towing on private land without lawful authority is a CRIMINAL OFFENCE in England & Wales (also banned in Scotland).
+               - Private Parking Charge Notices (PCNs) are civil contract invoices, NOT criminal fines — keeper liability in England & Wales strictly requires compliance with PoFA 2012 Schedule 4 (e.g., 14-day ANPR notice window).
+               - Statutory Private Parking Code of Practice 2026 (Parking (Code of Practice) Act 2019): Laid before Parliament on 20 October 2026 and expected to take effect on 21 December 2026 (5-min consideration, 10-min grace period, £100 cap). As of November 2026 it is NOT YET IN FORCE — current tickets are governed by existing BPA/IPC industry codes.
+
+            5. TRAIN & BUS TICKET INSPECTORS (RPOs):
+               - Regulation of Railways Act 1889 s.5 & National Railway Byelaws: If a railway officer/RPO reasonably suspects travel without a valid ticket or intent to avoid payment, you ARE legally required to give your name and address (refusal or false details is a criminal offence).
+               - However, private RPOs are NOT police constables: they have no general power to assault, unlawfully grab phones, or physically detain passengers beyond narrow statutory limits (only British Transport Police / constables have full arrest powers).
+
+            6. CAR DEALERS, REFUNDS & NEIGHBOUR / DRIVEWAY DISPUTES:
+               - Consumer Rights Act 2015: Goods/used cars bought from a trade dealer MUST be of satisfactory quality, fit for purpose, and as described. "Sold as seen" or "no refunds on used cars" from a business dealer is UNLAWFUL and void. Buyers have a 30-day short-term right to reject for a full refund (ss.20–22), and faults within 6 months are presumed present at purchase (s.19). Private-to-private sales have far narrower rights ("as described" & lawful title only).
+               - Domestic CCTV / Ring Doorbells: Under UK GDPR / Data Protection Act 2018, cameras capturing beyond the owner's property boundary (public road or neighbour's garden) lose the domestic exemption and trigger ICO data-controller obligations (signage, purpose limitation, SAR compliance).
+               - Blocked Driveways: Parking on someone's private driveway without consent is civil trespass (not a police matter unless aggravating offences occur); blocking a vehicle IN across a dropped kerb onto a public highway is an offence (Highways Act 1980 / council enforcement), whereas parking on a public street outside someone's house (no dropped kerb or restrictions) is lawful.
+
+            SPEAKER & COMPLETENESS RULES (CRITICAL):
+            - Classify EVERY speaker's "side":
+              * "STAFF_SECURITY" = TV Licensing officer, Landlord, Letting Agent, Shop Security/Manager, Parking Warden, Ticket Inspector/RPO, Car Dealer, or Neighbour making a legal claim (use clear specific speaker labels like "TV Licensing", "Landlord", "Security", "Inspector", "Dealer").
+              * "OFFICER" = ONLY if an actual UK Police officer speaks in the clip.
+              * "PUBLIC" = The householder, tenant, shopper, driver, passenger, buyer, or filmer.
+            - Transcribe the full encounter chronologically in "fullTranscript".
+            - Fact-check EVERY legally notable claim, demand, refusal, or counter-claim across the entire recording (typically 4–12 timeline cards on a multi-minute clip — NEVER stop at 1–3 cards if more happens).
+            - Mark ALL 8 "gowisely" entries as "SKIPPED".
+            - Verdicts:
+              * "LAWFUL" = Legally accurate statement or lawful assertion of rights.
+              * "PROCEDURAL_BREACH" = Breach of statutory procedure/notice/code (e.g., landlord entering without 24h notice, missing PACE caution, PoFA 14-day breach).
+              * "UNLAWFUL_DEMAND" = Illegal eviction/lockout, unlawful detention/false citizen's arrest, clamping threat, illegal "sold as seen" denial, or criminal offence.
+              * "MISLEADING_CLAIM" = Factually wrong legal claim or myth from either side (e.g., citing abolished Section 21 in England, claiming receipt checks are compulsory by law, or falsely telling a rail RPO you never have to give your name).
+
+            Return ONLY valid JSON matching the exact Pocket Lawyer UK schema:
+            {
+              "title": "Short descriptive title",
+              "jurisdiction": "ENGLAND_WALES | SCOTLAND | NORTHERN_IRELAND",
+              "complianceScore": 0,
+              "scoreSummary": "1-sentence summary stating whether the claims and actions in this clip comply with November 2026 UK law.",
+              "officerViolationCount": 0,
+              "staffViolationCount": 0,
+              "publicMythCount": 0,
+              "fullTranscript": [
+                { "timestampSeconds": 0, "speaker": "Landlord | Security | TV Licensing | Inspector | Dealer | Citizen", "text": "Verbatim spoken line" }
+              ],
+              "yourRights": ["Plain-English UK right with exact Act & Section"],
+              "whatIfGuide": {
+                "whatYouCanRefuse": ["Concrete thing you can lawfully refuse in this situation"],
+                "whatYouMustDo": ["Practical lawful duty or next step"],
+                "exactScriptToSay": "Calm, polite 2-sentence script citing the exact UK law to say on the spot"
+              },
+              "gowisely": [
+                { "step": "Grounds for search", "status": "SKIPPED", "note": "Not applicable to non-police encounter" },
+                { "step": "Object of search", "status": "SKIPPED", "note": "Not applicable" },
+                { "step": "Warrant card (if plain-clothed)", "status": "SKIPPED", "note": "Not applicable" },
+                { "step": "Identity of officer", "status": "SKIPPED", "note": "Not applicable" },
+                { "step": "Station attached to", "status": "SKIPPED", "note": "Not applicable" },
+                { "step": "Entitlement to copy of record", "status": "SKIPPED", "note": "Not applicable" },
+                { "step": "Legislation being applied", "status": "SKIPPED", "note": "Not applicable" },
+                { "step": "You are detained for a search", "status": "SKIPPED", "note": "Not applicable" }
+              ],
+              "timeline": [
+                {
+                  "timestampSeconds": 10,
+                  "speaker": "Landlord",
+                  "side": "STAFF_SECURITY",
+                  "quote": "First notable claim or demand from early in the clip",
+                  "verdict": "UNLAWFUL_DEMAND",
+                  "citation": "Renters' Rights Act 2025 / Protection from Eviction Act 1977",
+                  "explanation": "Plain-English fact-check under November 2026 UK law"
+                },
+                {
+                  "timestampSeconds": 42,
+                  "speaker": "Tenant",
+                  "side": "PUBLIC",
+                  "quote": "Second notable claim or response from later in the clip",
+                  "verdict": "LAWFUL",
+                  "citation": "Renters' Rights Act 2025",
+                  "explanation": "Plain-English verification of this statement"
+                }
+              ],
+              "takeaway": "Plain-English final verdict summarising who was legally right and wrong."
+            }
+        """.trimIndent()
 
         private val UK_BAILIFF_WARRANT_PROMPT = """
             You are Pocket Lawyer UK's Bailiff, Warrant & Debt Call Fact-Checker (current UK law as of November 2026).
@@ -1096,7 +1226,7 @@ class LegalAuditService(
               * Restrictive Covenants / Non-Competes (Common Law restraint of trade): Flag overly broad duration, geography, or blanket post-termination bans. Note that statutory 'fire and rehire' bans take effect in March 2027 and NDA harassment/discrimination restrictions in September 2027 — do not claim those are already in force in November 2026.
             - Speeding NIPs: Road Traffic Offenders Act 1988 s.1 (14-day rule for registered keeper) & RTA s.172 (28 days to name driver).
             - Private Parking (PCNs): Protection of Freedoms Act 2012 Schedule 4 (14-day ANPR notice rule, signage, grace periods).
-            - Renting (England): Renters' Rights Act 2025 (in force from 1 May 2026 — Section 21 no-fault evictions abolished, fixed terms abolished, valid Section 8 grounds required).
+            - Renting (England): Renters' Rights Act 2025 (in force from 1 May 2026 — Section 21 no-fault evictions abolished, fixed terms abolished, valid Section 8 grounds required). For English private tenancy agreements or eviction notices, apply the Renters' Rights Act 2025 (in force 1 May 2026): flag any Section 21 no-fault notice, fixed-term lock-in, automatic rent-review clause, blanket no-pets ban, or demand for more than 1 month's rent in advance as unlawful.
             - Consumer & Contracts: Consumer Rights Act 2015 (30-day short-term right to reject, Part 2 unfair contract terms, hidden auto-renewals/exit fees).
             Return ONLY valid JSON:
             {
